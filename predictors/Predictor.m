@@ -15,6 +15,10 @@ classdef Predictor < handle
                 obj.njoints = 14;
             end
         end
+        
+        function train(~, ~)
+            % Do nothing by default
+        end
     end
     
     methods(Abstract)
