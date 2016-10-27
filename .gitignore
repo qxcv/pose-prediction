@@ -1,1 +1,8 @@
+# Project data
 IkeaDataset
+IkeaClipsDB.mat
+poses/
+
+# Editor cruft
+*.swp
+*~
