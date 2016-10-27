@@ -12,7 +12,7 @@ predictors = struct('name', {'extend', 'average', 'linear2'}, ...
     'predictor', {...
         Extend(offsets, njoints), ...
         Average(offsets, njoints), ...
-        LeastSquares(offsets, njoints, [270 280 290 300]), ...
+        LeastSquares(offsets, njoints, 290:2:300), ...
 });
  
 % Train each model
@@ -31,7 +31,7 @@ end
 fprintf('Training done. Evaluating on validation set\n');
 all_preds = zeros([njoints, 2, length(offsets), length(val_ids), length(predictors)]);
 all_gts = zeros([njoints, 2, length(offsets), length(val_ids)]);
-for val_seq_pos=1:length(val_ids)
+parfor val_seq_pos=1:length(val_ids)
     fprintf('Working on seq %i/%i\n', val_seq_pos, length(val_ids));
     
     val_seq_id = val_ids(val_seq_pos);
@@ -42,11 +42,13 @@ for val_seq_pos=1:length(val_ids)
     test_poses = info.poses(:, :, 1:info.ntrain);
     all_gts(:, :, :, val_seq_pos) = info.poses(:, :, info.offsets);
     
+    these_preds = zeros([njoints, 2, length(offsets), length(predictors)]);
     for i=1:length(predictors)
         predictor = predictors(i).predictor;
         preds = predictor.predict(test_poses);
-        all_preds(:, :, :, val_seq_pos, i) = preds;
+        these_preds(:, :, :, i) = preds;
     end
+    all_preds(:, :, :, val_seq_pos, :) = these_preds;
 end
 
 all_pckh = zeros([length(offsets), length(predictors)]);
@@ -64,7 +66,7 @@ end
 
 figure;
 hold on;
-for pred_id=1:length(predictors);
+for pred_id=1:length(predictors)
     plot(offsets, all_pckh(:, pred_id), ...
         'DisplayName', predictors(pred_id).name);
 end

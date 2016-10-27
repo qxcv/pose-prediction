@@ -33,20 +33,16 @@ classdef LeastSquares < Predictor
             % Turned out to be easier to flatten afterwards
             Xf = reshape(X, [], ntaps);
             Yf = reshape(Y, [], noffsets);
-            cvx_begin
-                variable W(ntaps, noffsets);
-                expression costs(noffsets);
-                for o=1:noffsets
-                    costs(o) = norm(Xf * W(:, o) - Yf(:, o));
-                end
-                minimize(sum(costs))
-            cvx_end
+            W = nan(noffsets, ntaps);
+            for o=1:noffsets
+                W(o, :) = Xf \ Yf(:, o);
+            end
             obj.weights = W;
         end
         
         function poses = predict(obj, seq)
             in_poses = seq(:, :, obj.taps);
-            flat_out = reshape(in_poses, [], length(obj.taps)) * obj.weights;
+            flat_out = reshape(in_poses, [], length(obj.taps)) * obj.weights';
             poses = reshape(flat_out, [obj.njoints, 2, length(obj.offsets)]);
         end
     end
