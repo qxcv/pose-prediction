@@ -2,6 +2,7 @@
 IkeaDataset
 IkeaClipsDB.mat
 poses
+shots
 
 # Editor cruft
 *.swp

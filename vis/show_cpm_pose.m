@@ -12,7 +12,7 @@ function show_cpm_pose(im_path, bb, det_pose)
 % 8: Left wrist
 
 im = imread(im_path); im = imcrop(im, bb);
-imshow(im);
+imagesc(im);
 hold on;
 det_pose(:,1) = det_pose(:,1)*size(im,2)/368;
 det_pose(:,2) = det_pose(:,2)*size(im,1)/368;
