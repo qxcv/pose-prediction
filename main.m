@@ -35,7 +35,7 @@ end
 fprintf('Training done. Evaluating on validation set\n');
 all_preds = zeros([njoints, 2, length(offsets), length(val_ids), length(predictors)]);
 all_gts = zeros([njoints, 2, length(offsets), length(val_ids)]);
-parfor val_seq_pos=1:length(val_ids)
+for val_seq_pos=1:length(val_ids)
     fprintf('Working on seq %i/%i\n', val_seq_pos, length(val_ids));
     
     val_seq_id = val_ids(val_seq_pos);
@@ -57,7 +57,7 @@ end
 
 thresholds = 0:0.025:0.5;
 all_pckh = zeros([length(thresholds), length(predictors), length(offsets)]);
-for off_id=1:length(offsets)
+parfor off_id=1:length(offsets)
     for pred_id = 1:length(predictors)
         gts = squeeze(all_gts(:, :, off_id, :));
         preds = squeeze(all_preds(:, :, off_id, :, pred_id));

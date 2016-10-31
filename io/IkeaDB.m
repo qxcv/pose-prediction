@@ -48,9 +48,12 @@ classdef IkeaDB < handle
                 offsets(i) = 1 - start + pf;
                 pose_end = max([finish pf]);
             end
+            ntrain = finish - start + 1;
+            % XXX: Hack to add some extra offsets
+            offsets = [(5:5:15) + ntrain, offsets];
             seq_poses = obj.poses{dbi.video_id}(:, :, start:pose_end);
             info = struct('anno', dbi, 'poses', seq_poses, ...
-                'offsets', offsets, 'ntrain', finish - start + 1, ...
+                'offsets', offsets, 'ntrain', ntrain, ...
                 'njoints', size(seq_poses, 1));
         end
         
