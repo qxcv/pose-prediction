@@ -18,18 +18,10 @@ classdef IndepMarkovLearner < Predictor
         end
         
         function train(obj, seqs)
-            psize = 2 * obj.njoints;
             nseqs = length(seqs);
             ntaps = length(obj.taps);
             noffsets = length(obj.offsets);
             obj.models = cell([obj.njoints, 2, noffsets]);
-            
-            % Prepare training data
-            X = nan([nseqs, ntaps * psize]);
-            for seq=1:nseqs
-                pose_data = seqs{seq}.poses(:, :, obj.taps);
-                X(seq, :) = pose_data(:);
-            end
             
             % Now train
             % This code is a little weird because I was using a parfor
@@ -44,7 +36,10 @@ classdef IndepMarkovLearner < Predictor
                     for off_i=1:noffsets
                         offset = offsets(off_i);
                         Y = nan([nseqs 1]);
+                        X = nan([nseqs, ntaps * 2]);
                         for seq=1:nseqs
+                            pose_data = seqs{seq}.poses(joint, :, obj.taps);
+                            X(seq, :) = pose_data(:);
                             Y(seq) = seqs{seq}.poses(joint, coord, offset);
                         end
                         local_models{joint, coord, off_i} = ...
@@ -59,11 +54,9 @@ classdef IndepMarkovLearner < Predictor
             noffsets = length(obj.offsets);
             poses = nan([obj.njoints, 2, length(obj.offsets)]);
 
-            % Inputs are the same for all points, as during training
-            pose_data = seq(:, :, obj.taps);
-            x = reshape(pose_data(:), 1, []);
-
             for joint=1:obj.njoints
+                pose_data = seq(joint, :, obj.taps);
+                x = reshape(pose_data(:), 1, []);
                 for coord=1:2
                     for off_i=1:noffsets
                         model = obj.models{joint, coord, off_i};
