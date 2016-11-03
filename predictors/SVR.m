@@ -5,11 +5,12 @@ classdef SVR < IndepMarkovLearner
             obj@IndepMarkovLearner(varargin{:});
         end
         
-        function model = train_point(obj, X, Y)
-            return fitrlinear
+        function model = train_point(~, X, Y)
+            model = fitrlinear(X, Y);
         end
         
-        function point = predict_point(obj, model, X)
+        function point = predict_point(~, model, X)
+            point = model.predict(X);
         end
         
     end

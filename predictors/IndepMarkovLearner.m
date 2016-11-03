@@ -21,8 +21,8 @@ classdef IndepMarkovLearner < Predictor
             psize = 2 * obj.njoints;
             nseqs = length(seqs);
             ntaps = length(obj.taps);
-            obj.models = cell([njoints, 2, noffsets]);
             noffsets = length(obj.offsets);
+            obj.models = cell([obj.njoints, 2, noffsets]);
             
             % Prepare training data
             X = nan([nseqs, ntaps * psize]);
@@ -32,35 +32,43 @@ classdef IndepMarkovLearner < Predictor
             end
             
             % Now train
+            % This code is a little weird because I was using a parfor
+            % (until I realised that it takes heaps of memory when you have
+            % big objects to copy).
+            offsets = obj.offsets;
+            local_models = obj.models;
+            train_point = @obj.train_point;
+            % parfor joint=1:obj.njoints
             for joint=1:obj.njoints
                 for coord=1:2
                     for off_i=1:noffsets
-                        offset = obj.offsets(i);
+                        offset = offsets(off_i);
                         Y = nan([nseqs 1]);
                         for seq=1:nseqs
                             Y(seq) = seqs{seq}.poses(joint, coord, offset);
                         end
-                        obj.models{joint, coord, off_i} = ...
-                            obj.train_point(X, Y);
+                        local_models{joint, coord, off_i} = ...
+                            train_point(X, Y);
                     end
                 end
             end
+            obj.models = local_models;
         end
         
-        function poses = predict(obj, poses)
+        function poses = predict(obj, seq)
+            noffsets = length(obj.offsets);
             poses = nan([obj.njoints, 2, length(obj.offsets)]);
 
             % Inputs are the same for all points, as during training
-            x = nan([ntaps * psize]);
-            pose_data = poses(:, :, obj.taps);
-            x(seq, :) = pose_data(:);
+            pose_data = seq(:, :, obj.taps);
+            x = reshape(pose_data(:), 1, []);
 
             for joint=1:obj.njoints
                 for coord=1:2
                     for off_i=1:noffsets
                         model = obj.models{joint, coord, off_i};
                         poses(joint, coord, off_i) = ...
-                            obj.train_point(model, x);
+                            obj.predict_point(model, x);
                     end
                 end
             end

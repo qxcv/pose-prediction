@@ -51,7 +51,8 @@ classdef IkeaDB < handle
             ntrain = finish - start + 1;
             % XXX: Hack to add some extra offsets
             offsets = [(5:5:15) + ntrain, offsets];
-            seq_poses = obj.poses{dbi.video_id}(:, :, start:pose_end);
+            % Only grap relevant joints (rest are not reliable)
+            seq_poses = obj.poses{dbi.video_id}(1:8, :, start:pose_end);
             info = struct('anno', dbi, 'poses', seq_poses, ...
                 'offsets', offsets, 'ntrain', ntrain, ...
                 'njoints', size(seq_poses, 1));

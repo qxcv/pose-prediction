@@ -11,12 +11,13 @@ offsets = sample_info.offsets;
 njoints = sample_info.njoints;
 val_ids = find(db.is_val);
 predictors = struct('name', {...
-      'extend', 'average', 'linear2', 'velocity' ...
+      'extend', 'average', 'linear2', 'velocity', 'svr', ...
     }, 'predictor', {...
        Extend(offsets, njoints), ...
        Average(offsets, njoints), ...
-       LeastSquares(offsets, njoints, 295:1:300), ...
+       LeastSquares(offsets, njoints, 285:3:300), ...
        Velocity(offsets, njoints), ...
+       SVR(offsets, njoints, 285:3:300), ...
 });
  
 % Train each model
@@ -57,7 +58,7 @@ end
 
 thresholds = 0:0.025:0.5;
 all_pckh = zeros([length(thresholds), length(predictors), length(offsets)]);
-parfor off_id=1:length(offsets)
+for off_id=1:length(offsets)
     for pred_id = 1:length(predictors)
         gts = squeeze(all_gts(:, :, off_id, :));
         preds = squeeze(all_preds(:, :, off_id, :, pred_id));
@@ -82,39 +83,40 @@ for off_id=1:length(offsets)
         plot(thresholds, off_pcks(:, pred_id), ...
              'DisplayName', predictors(pred_id).name);
     end
-    title(sprintf('PCKh@%.3g', off_pcks));
-    legend('show');
+    title(sprintf('PCKh, frame %i', offsets(off_id)));
+    l = legend('show');
     ylim([0 1]);
     xlim([0 max(thresholds)]);
+    l.set('location', 'best'); % why is this not the default?
     hold off;
 end
 
 % Save plots for 20 randomly chosen sequences
-dirname = fullfile('shots', datestr(datetime, 'yyyy-mm-ddTHH:MM:SS'));
-mkdir_p(dirname);
-rand_ids = randperm(length(val_ids));
-rand_ids = rand_ids(1:20);
-parfor rid=1:length(rand_ids)
-    val_seq_pos = rand_ids(rid);
-    fprintf('Saving seq %i/%i\n', rid, length(rand_ids));
-
-    val_seq_id = val_ids(val_seq_pos);
-
-    for off_id=1:length(offsets)
-        offset = offsets(off_id);
-        for pred_id=1:length(predictors)
-            figure('Visible', 'off');
-            axes('Visible', 'off');
-            % Need to use val_seq_id in calls to db, val_seq_pos when
-            % indexing into all_preds.
-            pred = all_preds(:, :, off_id, val_seq_pos, pred_id);
-            db.show_pose(val_seq_id, offset, pred);
-            hold off;
-            result_path = fullfile(dirname, sprintf('%s-frame-%i-seq-%i.jpg', ...
-                                                    predictors(pred_id).name, ...
-                                                    offset, val_seq_id));
-            print(gcf, '-djpeg', result_path, '-r 150');
-            delete(gcf);
-        end
-    end
-end
+% dirname = fullfile('shots', datestr(datetime, 'yyyy-mm-ddTHH:MM:SS'));
+% mkdir_p(dirname);
+% rand_ids = randperm(length(val_ids));
+% rand_ids = rand_ids(1:20);
+% parfor rid=1:length(rand_ids)
+%     val_seq_pos = rand_ids(rid);
+%     fprintf('Saving seq %i/%i\n', rid, length(rand_ids));
+% 
+%     val_seq_id = val_ids(val_seq_pos);
+% 
+%     for off_id=1:length(offsets)
+%         offset = offsets(off_id);
+%         for pred_id=1:length(predictors)
+%             figure('Visible', 'off');
+%             axes('Visible', 'off');
+%             % Need to use val_seq_id in calls to db, val_seq_pos when
+%             % indexing into all_preds.
+%             pred = all_preds(:, :, off_id, val_seq_pos, pred_id);
+%             db.show_pose(val_seq_id, offset, pred);
+%             hold off;
+%             result_path = fullfile(dirname, sprintf('%s-frame-%i-seq-%i.jpg', ...
+%                                                     predictors(pred_id).name, ...
+%                                                     offset, val_seq_id));
+%             print(gcf, '-djpeg', result_path, '-r 150');
+%             delete(gcf);
+%         end
+%     end
+% end
