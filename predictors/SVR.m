@@ -6,11 +6,17 @@ classdef SVR < IndepMarkovLearner
         end
         
         function model = train_point(~, X, Y)
-            model = fitrlinear(X, Y);
+            % Train on a few randomly chosen points to speed things up
+            num_train = min([size(X, 1), 2000]);
+            p = randperm(num_train);
+            Xp = X(p, :);
+            Yp = Y(p);
+            model = fitrsvm(Xp, Yp, 'KernelFunction', 'rbf');
+            % model = fitrsvm(Xp, Yp);
         end
         
         function point = predict_point(~, model, X)
-            point = model.predict(X);
+            point = predict(model, X);
         end
         
     end
