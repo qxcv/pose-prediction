@@ -6,6 +6,8 @@ classdef IkeaDB < handle
         is_train
         is_test
         is_val
+        has_anno
+        subj_ids
     end
     
     methods
@@ -29,16 +31,27 @@ classdef IkeaDB < handle
                 obj.poses{i} = loadout(path, 'pose');
             end
             
-            % Subjects 1 and 2 are for training, subject 3 is for
-            % validation, subject 4 is for testing.
-            subj_ids = [obj.data.person_idx];
-            obj.is_train = ismember(subj_ids, [1 2]);
-            obj.is_test = ismember(subj_ids, 3);
+            % Subjects 9, 11 and 13 are for testing. The rest are for
+            % training. I'm going to arbitrarily train on [1, 2, 4, 5, 7, 8
+            % 10, 12, 15].
+            obj.subj_ids = [obj.data.person_idx];
+            obj.is_train = ismember(obj.subj_ids, [1, 2, 4, 6, 7, 8, 10, 12, 15]);
+            obj.is_test = ismember(obj.subj_ids, [9 11 13]);
+            obj.has_anno = ~cellfun(@isempty, {obj.data.annot_test_poses});
+            no_anno = find(obj.is_test & ~obj.has_anno);
+            
+            if ~isempty(no_anno)
+                warning('pp:MissingTestAnno', ...
+                    '%d/%d test items have no manual annotation', ...
+                    length(no_anno), sum(obj.is_test));
+                % display(no_anno);
+            end
+            obj.is_test = obj.is_test & obj.has_anno;
             obj.is_val = ~(obj.is_train | obj.is_test);
         end
         
-        function info = seqinfo(obj, i)
-            dbi = obj.data(i);
+        function info = seqinfo(obj, datum_id)
+            dbi = obj.data(datum_id);
             start = obj.pframe(dbi.frame_start);
             finish = obj.pframe(dbi.frame_end);
             offsets = nan([1 5]);
@@ -49,13 +62,24 @@ classdef IkeaDB < handle
                 pose_end = max([finish pf]);
             end
             ntrain = finish - start + 1;
-            % XXX: Hack to add some extra offsets
-            offsets = [(5:5:15) + ntrain, offsets];
-            % Only grap relevant joints (rest are not reliable)
-            seq_poses = obj.poses{dbi.video_id}(1:8, :, start:pose_end);
+            % Only grab relevant joints (rest are not reliable)
+            good_joints = 1:8;
+            seq_poses = obj.poses{dbi.video_id}(good_joints, :, start:pose_end);
+            % XXX: Shouldn't perform this smoothing here :P
+            seq_poses = smooth_poses(seq_poses);
+            test_poses = dbi.annot_test_poses;
+            if ~isempty(test_poses)
+                test_poses = test_poses(good_joints, :, :);
+            end
             info = struct('anno', dbi, 'poses', seq_poses, ...
                 'offsets', offsets, 'ntrain', ntrain, ...
-                'njoints', size(seq_poses, 1));
+                'njoints', size(seq_poses, 1), ...
+                'test_poses', test_poses);
+            
+            if obj.is_test(datum_id) && isempty(info.test_poses)
+                warning('pp:NoTestAnno', 'No true pose for datum %i', ...
+                    datum_id);
+            end
         end
         
         function show_pose(obj, seq_id, pose_id, det_pose)

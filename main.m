@@ -9,7 +9,10 @@ end
 sample_info = db.seqinfo(1);
 offsets = sample_info.offsets;
 njoints = sample_info.njoints;
-val_ids = find(db.is_val);
+ntrain = sample_info.ntrain;
+% val_ids = find(db.is_val);
+% XXX: Hack to use manually annotated test poses
+val_ids = find(db.is_test);
 taps = 240:3:300;
 if ~exist('predictors', 'var')
     predictors = struct('name', {...
@@ -40,42 +43,51 @@ for pi=1:length(predictors)
 end
 
 % Get predictions on the validation set
+% XXX: Currently using test set because there are no reliable validation
+% annotations (or training annotations, but that's a different story...).
 fprintf('Training done. Evaluating on validation set\n');
 all_preds = zeros([njoints, 2, length(offsets), length(val_ids), length(predictors)]);
 all_gts = zeros([njoints, 2, length(offsets), length(val_ids)]);
+test_poses = zeros([njoints, 2, ntrain, length(val_ids)]);
 for val_seq_pos=1:length(val_ids)
-    if val_seq_pos == 1 || ~mod(val_seq_pos, 100)
-        fprintf('Working on seq %i/%i\n', val_seq_pos, length(val_ids));
-    end
-    
     val_seq_id = val_ids(val_seq_pos);
     info = db.seqinfo(val_seq_id);
     assert(info.njoints == njoints);
     assert(all(info.offsets == offsets));
     
-    test_poses = info.poses(:, :, 1:info.ntrain);
-    all_gts(:, :, :, val_seq_pos) = info.poses(:, :, info.offsets);
-    
+    test_poses(:, :, :, val_seq_pos) = info.poses(:, :, 1:info.ntrain);
+    % all_gts(:, :, :, val_seq_pos) = info.poses(:, :, info.offsets);
+    all_gts(:, :, :, val_seq_pos) = info.test_poses;
+end
+% TODO: Make this a parfor once I figure out how to shrink my predictors :/
+for val_seq_pos=1:length(val_ids)        
+    these_tps = test_poses(:, :, :, val_seq_pos);
     these_preds = zeros([njoints, 2, length(offsets), length(predictors)]);
     for i=1:length(predictors)
         predictor = predictors(i).predictor;
-        preds = predictor.predict(test_poses);
+        preds = predictor.predict(these_tps);
         these_preds(:, :, :, i) = preds;
     end
     all_preds(:, :, :, val_seq_pos, :) = these_preds;
 end
 
-thresholds = 0:0.025:0.5;
+% thresholds = 0:0.025:0.5;
+thresholds = 0:1:100;
 all_pckh = zeros([length(thresholds), length(predictors), length(offsets)]);
 for off_id=1:length(offsets)
+    gts = squeeze(all_gts(:, :, off_id, :));
+    cell_gts = squeeze(num2cell(gts, [1 2]));
     for pred_id = 1:length(predictors)
-        gts = squeeze(all_gts(:, :, off_id, :));
         preds = squeeze(all_preds(:, :, off_id, :, pred_id));
-        cell_gts = squeeze(num2cell(gts, [1 2]));
         cell_preds = squeeze(num2cell(preds, [1 2]));
         % Calculate PCKh@thresh averaged across wrists and elbows
-        pckh = pck(cell_preds, cell_gts, thresholds, [1 2]);
+        % XXX: No longer using pckh. Now using non-normalised measure :/
+        % pckh = pck(cell_preds, cell_gts, thresholds, [1 2]);
+        pckh = pck(cell_preds, cell_gts, thresholds);
         all_pckh(:, pred_id, off_id) = cellfun(@(c) mean(c([4 5 7 8])), pckh);
+        % Uncomment next line to measure head/shoulders instead (I think; I
+        % might have some of the joints wrong there)
+        % all_pckh(:, pred_id, off_id) = cellfun(@(c) mean(c([1 2 3])), pckh);
     end
 end
 
@@ -92,7 +104,8 @@ for off_id=1:length(offsets)
         plot(thresholds, off_pcks(:, pred_id), ...
              'DisplayName', predictors(pred_id).name);
     end
-    title(sprintf('PCKh, frame %i', offsets(off_id)));
+    % title(sprintf('PCKh, frame %i', offsets(off_id)));
+    title(sprintf('Accuracy, frame %i', offsets(off_id)));
     l = legend('show');
     ylim([0 1]);
     xlim([0 max(thresholds)]);

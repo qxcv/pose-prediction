@@ -11,7 +11,13 @@ classdef SVR < IndepMarkovLearner
             p = randperm(num_train);
             Xp = X(p, :);
             Yp = Y(p);
-            model = fitrsvm(Xp, Yp, 'KernelFunction', 'rbf');
+            % TODO: Replace this with libsvm so that I can run it on
+            % paloalto.
+            model = fitrsvm(Xp, Yp, ...
+                'KernelFunction', 'rbf', ...
+                'Standardize', true);
+            % model = fitrsvm(Xp, Yp, 'KernelFunction', 'polynomial', ...
+            %     'PolynomialOrder', 2, 'Standardize', true);
             % model = fitrsvm(Xp, Yp);
         end
         
