@@ -3,6 +3,10 @@ IkeaDataset
 IkeaClipsDB.mat
 poses
 shots
+h3.6m
+new-poses/
+ref/
+todo.txt
 
 # Editor cruft
 *.swp

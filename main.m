@@ -4,7 +4,8 @@ startup;
 
 if ~exist('db', 'var')
     % XXX: Stupid speedup trick
-    db = IkeaDB;
+    % db = IkeaDB;
+    db = H36MDB;
 end
 sample_info = db.seqinfo(1);
 offsets = sample_info.offsets;
@@ -13,7 +14,6 @@ ntrain = sample_info.ntrain;
 % val_ids = find(db.is_val);
 % XXX: Hack to use manually annotated test poses
 val_ids = find(db.is_test);
-taps = 240:3:300;
 if ~exist('predictors', 'var')
     predictors = struct('name', {...
           'extend', 'average', 'linear2', 'velocity', 'svr', ...
@@ -21,9 +21,9 @@ if ~exist('predictors', 'var')
         'predictor', {...
            Extend(offsets, njoints), ...
            Average(offsets, njoints), ...
-           LeastSquares(offsets, njoints, taps), ...
+           LeastSquares(offsets, njoints, 240:5:300), ...
            Velocity(offsets, njoints), ...
-           SVR(offsets, njoints, taps), ...
+           SVR(offsets, njoints, 270:10:300), ...
     });
 end
  
@@ -44,7 +44,7 @@ end
 
 % Get predictions on the validation set
 % XXX: Currently using test set because there are no reliable validation
-% annotations (or training annotations, but that's a different story...).
+% annotations (or training annotations, but that's a different story…).
 fprintf('Training done. Evaluating on validation set\n');
 all_preds = zeros([njoints, 2, length(offsets), length(val_ids), length(predictors)]);
 all_gts = zeros([njoints, 2, length(offsets), length(val_ids)]);

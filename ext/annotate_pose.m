@@ -7,6 +7,7 @@ if isempty(IkeaDB)
     %IkeaDB=loadout('IkeaClipsDB.mat', 'IkeaDB');
 end
 test_person_idx = [3 7 8]; cnt = 0;
+% test_person_idx = [9 11 13]; cnt = 0;
 for t=1:length(IkeaDB)    
     if ~isempty(intersect(IkeaDB(t).person_idx, test_person_idx))
         cnt = cnt + 1;

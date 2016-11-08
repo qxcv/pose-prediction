@@ -1,17 +1,25 @@
-function show_cpm_pose(im_path, bb, det_pose)
+function show_cpm_pose(maybe_path, bb, det_pose)
 %SHOW_CPM_POSE Plot a pose in format used by CPM
 
 % Skeleton used by CPM:
 % 1: Head
 % 2: Neck
-% 3: Right sholder
+% 3: Right shoulder
 % 4: Right elbow
 % 5: Right wrist
 % 6: Left shoulder
 % 7: Left elbow
 % 8: Left wrist
 
-im = imread(im_path); im = imcrop(im, bb);
+% maybe_path could be an image path or an image
+if ischar(maybe_path)
+    im = imread(maybe_path);
+else
+    im = maybe_path;
+end
+if ~isempty(bb)
+    im = imcrop(im, bb);
+end
 imagesc(im);
 hold on;
 det_pose(:,1) = det_pose(:,1)*size(im,2)/368;
