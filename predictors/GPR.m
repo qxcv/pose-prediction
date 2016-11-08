@@ -6,11 +6,16 @@ classdef GPR < IndepMarkovLearner
         end
         
         function model = train_point(~, X, Y)
-            model = fitrgp(X, Y);
+            % Train on a few randomly chosen points to speed things up
+            num_train = min([size(X, 1), 500]);
+            p = randperm(num_train);
+            Xp = X(p, :);
+            Yp = Y(p);
+            model = fitrgp(Xp, Yp, 'BasisFunction', 'pureQuadratic');
         end
         
         function point = predict_point(~, model, X)
-            point = model.predict(X);
+            point = predict(model, X);
         end
         
     end
