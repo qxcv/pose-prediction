@@ -1,20 +1,22 @@
 classdef IndepMarkovLearner < Predictor
     % Interface for higher-order Markov models which predict joint-at-a-time
     properties
-        taps;
-        models;
+        taps
+        models
+        pa
     end
     
     methods
-        function obj = IndepMarkovLearner(offsets, joints, taps)
+        function obj = IndepMarkovLearner(offsets, njoints, taps, pa)
             if nargin == 0
                 super_args = {};
             else
-                super_args = {offsets, joints};
+                super_args = {offsets, njoints};
             end
             obj@Predictor(super_args{:});
             
             obj.taps = taps;
+            obj.pa = pa;
         end
         
         function train(obj, seqs)
@@ -27,7 +29,8 @@ classdef IndepMarkovLearner < Predictor
             
             % Upfront copying (into all_X, all_Y, etc.) is to make it
             % easier for PCT to figure out what to send to workers.
-            all_X = nan([nseqs, (ntaps-1) * 2, noffsets, obj.njoints]);
+            x_dim = ntaps * 2 * 2 - 2;
+            all_X = nan([nseqs, x_dim, noffsets, obj.njoints]);
             all_Y = nan([nseqs, noffsets, 2, obj.njoints]);
             for seq=1:nseqs
                 seq_poses = seqs{seq}.poses(:, :, :);
@@ -39,9 +42,11 @@ classdef IndepMarkovLearner < Predictor
                     all_taps = [obj.taps offset];
                     tapped = seq_poses(:, :, all_taps);
                     [normed, ~] = norm_seq(tapped);
+                    pa_offs = parent_offsets(tapped(:, :, 1:end-1), obj.pa);
                     for joint=1:obj.njoints
                         norm_X = normed(joint, :, 1:end-1);
-                        all_X(seq, :, off_i, joint) = norm_X(:);
+                        j_offs = pa_offs(joint, :, :);
+                        all_X(seq, :, off_i, joint) = [norm_X(:)', j_offs(:)'];
                         for coord=1:2
                             norm_Y = normed(joint, coord, end);
                             all_Y(seq, off_i, coord, joint) = norm_Y;
@@ -81,12 +86,14 @@ classdef IndepMarkovLearner < Predictor
                 % tapped/subsampled sequence) so that we can apply
                 % normalisation and un-normalisation.
                 [tapped, params] = norm_seq(seq(:, :, obj.taps));
+                pa_offs = parent_offsets(seq(:, :, obj.taps), obj.pa);
                 rec_seq = nan([obj.njoints, 2, ntaps]);
                 rec_seq(:, :, 1:end-1) = tapped;
                 pose = nan([obj.njoints, 2]);
                 for joint=1:obj.njoints
                     pose_data = tapped(joint, :, :);
-                    x = reshape(pose_data(:), 1, []);
+                    j_offs = pa_offs(joint, :, :);
+                    x = [reshape(pose_data(:), 1, []), j_offs(:)'];
                     for coord=1:2
                         model = obj.models{joint, coord, off_i};
                         pose(joint, coord) = ...

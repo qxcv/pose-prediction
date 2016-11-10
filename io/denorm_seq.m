@@ -8,4 +8,3 @@ cs = cumsum(normed, 3);
 trunc_orig = bsxfun(@plus, cs, params.init);
 orig = cat(3, params.init, trunc_orig);
 end
-

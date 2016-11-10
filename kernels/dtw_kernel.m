@@ -16,6 +16,8 @@ m = size(U, 1);
 n = size(V, 1);
 dists = zeros([m n]);
 for i=1:m
+    % Weird reshaping happens to be compatible with IndepMarkovLearner
+    % code; probably stale by the time you're reading this.
     Ut = reshape(U(i, :), [], dtw_T)';
     for j=1:n
         Vt = reshape(V(j, :), [], dtw_T)';
