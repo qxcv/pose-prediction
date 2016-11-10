@@ -3,6 +3,8 @@ classdef H36MDB < handle
         REAL_SUBJECTS = [1 5 6 7 8 9 11];
         % Try to emulate CPM joint structure
         KEEP_JOINTS = [16 14 26:28 18:20];
+        % Parents array
+        PA = [1 1 2 3 4 2 6 7];
         TEST_SUBJECT = 5;
         VAL_SUBJECT = 9;
     end

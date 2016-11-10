@@ -18,8 +18,10 @@ classdef IndepMarkovLearner < Predictor
         end
         
         function train(obj, seqs)
+            global dtw_T;
             nseqs = length(seqs);
             ntaps = length(obj.taps);
+            dtw_T = ntaps-1;
             noffsets = length(obj.offsets);
             obj.models = cell([obj.njoints, 2, noffsets]);
             
@@ -68,7 +70,10 @@ classdef IndepMarkovLearner < Predictor
         end
         
         function poses = predict(obj, seq)
+            global dtw_T;
             noffsets = length(obj.offsets);
+            ntaps = length(obj.taps);
+            dtw_T = ntaps-1;
             poses = nan([obj.njoints, 2, length(obj.offsets)]);
 
             for off_i=1:noffsets
@@ -76,7 +81,6 @@ classdef IndepMarkovLearner < Predictor
                 % tapped/subsampled sequence) so that we can apply
                 % normalisation and un-normalisation.
                 [tapped, params] = norm_seq(seq(:, :, obj.taps));
-                ntaps = length(obj.taps);
                 rec_seq = nan([obj.njoints, 2, ntaps]);
                 rec_seq(:, :, 1:end-1) = tapped;
                 pose = nan([obj.njoints, 2]);

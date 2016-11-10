@@ -1,4 +1,9 @@
 classdef IkeaDB < handle
+    properties(Constant)
+        % Parents array
+        PA = [1 1 2 3 4 2 6 7];
+    end
+    
     properties
         data
         root

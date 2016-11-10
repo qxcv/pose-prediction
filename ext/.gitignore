@@ -1,4 +1,5 @@
 libsvm-*/
 libsvm-*.tar.gz
-dtw/
+*.mexa64
+# dtw/
 dtw.zip

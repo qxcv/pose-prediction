@@ -11,7 +11,8 @@ classdef GPR < IndepMarkovLearner
             p = randperm(num_train);
             Xp = X(p, :);
             Yp = Y(p);
-            model = fitrgp(Xp, Yp, 'BasisFunction', 'pureQuadratic');
+            model = fitrgp(Xp, Yp, 'BasisFunction', 'pureQuadratic', ...
+                'Standardize', 1);
         end
         
         function point = predict_point(~, model, X)
