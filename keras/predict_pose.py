@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-
 """Various deep models for pose prediction."""
 
 from keras.models import Sequential
@@ -21,6 +20,7 @@ import numpy as np
 OFFSETS = [30]
 TAP_SUBSAMPLE = 5
 TAP_COUNT = 5
+
 
 def convert_2d_seq(seq):
     """Convert a T*2*8 sequence of poses into a representation more amenable
@@ -58,6 +58,7 @@ def pck_metric(threshs, joints=None, offsets=OFFSETS):
 
     return inner
 
+
 def prepare_data(fp):
     data = []
     labels = []
@@ -88,6 +89,7 @@ def prepare_data(fp):
 
     return np.concatenate(data), np.concatenate(labels)
 
+
 if __name__ == '__main__':
     print('Loading data')
     with h5py.File('h36m-poses.h5', 'r') as fp:
@@ -97,7 +99,8 @@ if __name__ == '__main__':
     out_size = 2 * 8 * len(OFFSETS)
     print('Building model')
     model = Sequential([
-        Dense(128, input_dim=in_size),
+        Dense(
+            128, input_dim=in_size),
         Activation('relu'),
         Dense(128),
         Activation('relu'),
@@ -107,4 +110,9 @@ if __name__ == '__main__':
     ])
     model.compile(optimizer='rmsprop', loss='mae')
     print('Fitting to data')
-    model.fit(in_data, labels)
+    model.fit(in_data,
+              labels,
+              batch_size=2048,
+              nb_epoch=100,
+              validation_split=0.2,
+              shuffle=True)
