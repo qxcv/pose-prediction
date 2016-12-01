@@ -3,6 +3,8 @@
 
 from keras.models import Sequential
 from keras.layers.core import Dense, Activation
+from keras.layers.normalization import BatchNormalization
+from keras.callbacks import ModelCheckpoint
 import h5py
 import numpy as np
 
@@ -28,12 +30,20 @@ def convert_2d_seq(seq):
     assert seq.ndim == 3 and seq.shape[1:] == (2, 8)
     pa = [0, 0, 1, 2, 3, 1, 5, 6]
     rv = seq.copy()
+
+    # Begin by standardising data. Should (approximately) center the person
+    rv = (rv - rv.mean()) / rv.std()
+
+    # For non-root nodes, use distance-to-parent only
+    # Results in root node (and root node only) storing absolute position
     for j, p in enumerate(pa):
         if j != p:
-            # For non-root nodes, use distance-to-parent only
-            # Results in root node (and root node only) storing absolute
-            # position
             rv[:, :, j] = seq[:, :, j] - seq[:, :, p]
+
+    # Track velocity with head, instead of absolute position.
+    rv[1:, :, 0] = rv[1:, :, 0] - rv[:-1, :, 0]
+    rv[0, :, 0] = [0, 0]
+
     return rv.reshape((rv.shape[0], -1))
 
 
@@ -42,7 +52,7 @@ def pck_metric(threshs, joints=None, offsets=OFFSETS):
         nt = len(offsets)
         rv = {}
 
-        for tresh in threshs:
+        for thresh in threshs:
             true_s = np.reshape(y_true, [8, 2, nt])
             pred_s = np.reshape(y_pred, [8, 2, nt])
             if joints is not None:
@@ -99,20 +109,21 @@ if __name__ == '__main__':
     out_size = 2 * 8 * len(OFFSETS)
     print('Building model')
     model = Sequential([
-        Dense(
-            128, input_dim=in_size),
+        Dense(128, input_dim=in_size),
         Activation('relu'),
+        BatchNormalization(),
         Dense(128),
         Activation('relu'),
+        BatchNormalization(),
+        Dense(128),
+        Activation('relu'),
+        BatchNormalization(),
         Dense(128),
         Activation('relu'),
         Dense(out_size),
     ])
-    model.compile(optimizer='rmsprop', loss='mae')
+    model.compile(optimizer='rmsprop', loss='mae', metrics=['mae'])
     print('Fitting to data')
-    model.fit(in_data,
-              labels,
-              batch_size=2048,
-              nb_epoch=100,
-              validation_split=0.2,
-              shuffle=True)
+    mod_check = ModelCheckpoint('./best-weights.h5', save_best_only=True)
+    model.fit(in_data, labels, batch_size=1024, validation_split=0.2,
+              nb_epoch=1000, shuffle=True, callbacks=[mod_check])
