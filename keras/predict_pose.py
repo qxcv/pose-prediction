@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
+
 """Various deep models for pose prediction."""
 
-from keras.models import Sequential
+from keras.models import Sequential, load_model
 from keras.layers.core import Dense, Activation
 from keras.layers.normalization import BatchNormalization
 from keras.callbacks import ModelCheckpoint
@@ -22,13 +23,13 @@ import numpy as np
 OFFSETS = [30]
 TAP_SUBSAMPLE = 5
 TAP_COUNT = 5
+PA = [0, 0, 1, 2, 3, 1, 5, 6]
 
 
 def convert_2d_seq(seq):
     """Convert a T*2*8 sequence of poses into a representation more amenable
     for learning. Returns T*F array of features."""
     assert seq.ndim == 3 and seq.shape[1:] == (2, 8)
-    pa = [0, 0, 1, 2, 3, 1, 5, 6]
     rv = seq.copy()
 
     # Begin by standardising data. Should (approximately) center the person
@@ -36,7 +37,7 @@ def convert_2d_seq(seq):
 
     # For non-root nodes, use distance-to-parent only
     # Results in root node (and root node only) storing absolute position
-    for j, p in enumerate(pa):
+    for j, p in enumerate(PA):
         if j != p:
             rv[:, :, j] = seq[:, :, j] - seq[:, :, p]
 
@@ -45,6 +46,15 @@ def convert_2d_seq(seq):
     rv[0, :, 0] = [0, 0]
 
     return rv.reshape((rv.shape[0], -1))
+
+
+# def unmap_predictions(seq):
+#     """Convert predictions back into actual poses. Assumes that original
+#     sequence (including input) was processed with `convert_2d_seq`. Always puts
+#     position of first predicted head at [0, 0]. Subsequent poses have head
+#     positions defined by previous ones."""
+#     seq.reshape
+#     rv = zeros()
 
 
 def pck_metric(threshs, joints=None, offsets=OFFSETS):
@@ -69,7 +79,7 @@ def pck_metric(threshs, joints=None, offsets=OFFSETS):
     return inner
 
 
-def prepare_data(fp):
+def prepare_data(fp, val_frac=0.2):
     data = []
     labels = []
 
@@ -77,6 +87,7 @@ def prepare_data(fp):
     in_offsets = np.arange(-TAP_SUBSAMPLE * (TAP_COUNT - 1), 1, TAP_SUBSAMPLE) \
                    .reshape(1, -1)
     out_offsets = np.array(OFFSETS).reshape((1, -1))
+    sizes = []
 
     for ds_name in fp.keys():
         if not ds_name.startswith('poses_'):
@@ -97,17 +108,33 @@ def prepare_data(fp):
         out_data = converted[out_indices]
         labels.append(out_data.reshape((out_data.shape[0], -1)))
 
-    return np.concatenate(data), np.concatenate(labels)
+        sizes.append(in_data.shape[0])
+
+    sizes = np.array(sizes)
+    data = np.array(data)
+    labels = np.array(labels)
+
+    # Do train/val split
+    required_val = val_frac * sum(sizes)
+    indices = np.arange(len(sizes))
+    np.random.shuffle(indices)
+    cum_sizes = np.cumsum(sizes[indices])
+    ind_is_val = cum_sizes < required_val
+    ind_is_train = ~ind_is_val
+    val_inds = indices[ind_is_val]
+    train_inds = indices[ind_is_train]
+
+    train_X = data[train_inds]
+    train_Y = labels[train_inds]
+    val_X = data[val_inds]
+    val_Y = labels[val_inds]
+
+    return tuple(map(np.concatenate, [train_X, train_Y, val_X, val_Y]))
 
 
-if __name__ == '__main__':
-    print('Loading data')
-    with h5py.File('h36m-poses.h5', 'r') as fp:
-        in_data, labels = prepare_data(fp)
-    print('Data loaded')
+def train_model(train_X, train_Y, val_X, val_Y):
     in_size = 2 * 8 * TAP_COUNT
     out_size = 2 * 8 * len(OFFSETS)
-    print('Building model')
     model = Sequential([
         Dense(128, input_dim=in_size),
         Activation('relu'),
@@ -125,5 +152,22 @@ if __name__ == '__main__':
     model.compile(optimizer='rmsprop', loss='mae', metrics=['mae'])
     print('Fitting to data')
     mod_check = ModelCheckpoint('./best-weights.h5', save_best_only=True)
-    model.fit(in_data, labels, batch_size=1024, validation_split=0.2,
-              nb_epoch=1000, shuffle=True, callbacks=[mod_check])
+    model.fit(train_X, train_Y, batch_size=1024, validation_data=(val_X, val_Y),
+            nb_epoch=1000, shuffle=True, callbacks=[mod_check])
+    return model
+
+
+if __name__ == '__main__':
+    print('Loading data')
+    with h5py.File('h36m-poses.h5', 'r') as fp:
+        train_X, train_Y, val_X, val_Y = prepare_data(fp)
+    print('Data loaded')
+
+    try:
+        print('Loading model')
+        model = load_model('./best-weights.h5')
+    except OSError:
+        print('Load failed, building model anew')
+        model = train_model(train_X, train_Y, val_X, val_Y)
+
+    # TODO: Check validation loss with PCK
