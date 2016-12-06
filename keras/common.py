@@ -1,9 +1,11 @@
 """Code shared between recurrent and non-recurrent pose prediction models."""
 
 from keras import backend as K
+from keras import objectives, metrics
 import numpy as np
 
 PA = [0, 0, 1, 2, 3, 1, 5, 6]
+
 
 def huber_loss(y_true, y_pred):
     diff = y_true - y_pred
@@ -12,6 +14,10 @@ def huber_loss(y_true, y_pred):
     error_sq = (diff ** 2) / 2.0
     merged = K.switch(diff_abs <= 1.0, error_sq, error_abs)
     return K.mean(merged)
+# This helps Keras model loader find huber_loss
+objectives.huber_loss = huber_loss
+metrics.huber_loss = huber_loss
+
 
 def convert_2d_seq(seq):
     """Convert a T*2*8 sequence of poses into a representation more amenable
@@ -62,7 +68,7 @@ def unmap_predictions(seq, n=1):
     return rv
 
 
-def pckh_metric(threshs, offsets):
+def pck(y_true, y_pred, threshs, offsets):
     """Calculate head-neck normalised PCK."""
 
     # Known bugs:
@@ -70,22 +76,20 @@ def pckh_metric(threshs, offsets):
     # - Code doesn't unmap predictions correctly, so this function won't work
     #   if used to produce a metric for Model.fit() (which is what it was
     #   intended for in the first place…)
-    assert False, "Fix marked bugs first"
 
-    def inner(y_true, y_pred):
-        nt = len(offsets)
-        rv = {}
+    nt = len(offsets)
+    rv = {}
 
-        for thresh in threshs:
-            true_s = np.reshape(y_true, [8, 2, nt])
-            pred_s = np.reshape(y_pred, [8, 2, nt])
-            dists = np.linalg.norm(true_s - pred_s, axis=1)
-            heads = np.linalg.norm(pred_s[0, :, :] - pred_s[1, :, :])
-            pck = (dists < heads * thresh).sum()
-            for off_i, off in enumerate(offsets):
-                label = 'pckh@%.2f/%d' % (thresh, off)
-                rv[label] = pck[off_i]
+    assert y_true.ndims == 3
+    assert y_true.shape == y_pred.shape
+    assert y_true.shape[1:] == (2, 8)
 
-        return rv
+    for thresh in threshs:
+        dists = np.linalg.norm(true_s - pred_s, axis=0)
+        heads = np.linalg.norm(pred_s[:, :, 0] - pred_s[:, :, 1], axis=0)
+        pck = (dists < heads * thresh).sum()
+        for off_i, off in enumerate(offsets):
+            label = 'pckh@%.2f/%d' % (thresh, off)
+            rv[label] = pck[off_i]
 
-    return inner
+    return rv
