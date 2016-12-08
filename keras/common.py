@@ -1,10 +1,13 @@
 """Code shared between recurrent and non-recurrent pose prediction models."""
 
+from collections import OrderedDict
+
 from keras import backend as K
 from keras import objectives, metrics
 import numpy as np
 
 PA = [0, 0, 1, 2, 3, 1, 5, 6]
+THRESHOLDS = [0.05, 0.15, 0.25, 0.5, 0.8]
 
 
 def huber_loss(y_true, y_pred):
@@ -71,23 +74,20 @@ def unmap_predictions(seq, n=1):
 def pck(y_true, y_pred, threshs, offsets):
     """Calculate head-neck normalised PCK."""
 
-    # Known bugs:
-    # - Unclear whether reshape on y_true, y_pred is correct
-    # - Code doesn't unmap predictions correctly, so this function won't work
-    #   if used to produce a metric for Model.fit() (which is what it was
-    #   intended for in the first place…)
-
     nt = len(offsets)
-    rv = {}
+    rv = OrderedDict()
 
-    assert y_true.ndims == 3
+    assert y_true.ndim == 4
     assert y_true.shape == y_pred.shape
-    assert y_true.shape[1:] == (2, 8)
+    assert y_true.shape[1:] == (nt, 2, 8)
 
     for thresh in threshs:
-        dists = np.linalg.norm(true_s - pred_s, axis=0)
-        heads = np.linalg.norm(pred_s[:, :, 0] - pred_s[:, :, 1], axis=0)
-        pck = (dists < heads * thresh).sum()
+        dists = np.linalg.norm(y_true - y_pred, axis=2)
+        # Normalise by head-chin distance (or something)
+        heads = np.linalg.norm(y_true[:, :, :, 0] - y_true[:, :, :, 1], axis=2)
+        pck = (dists < heads.reshape((heads.shape[0], nt, 1)) * thresh) \
+              .mean(axis=2) \
+              .mean(axis=0)
         for off_i, off in enumerate(offsets):
             label = 'pckh@%.2f/%d' % (thresh, off)
             rv[label] = pck[off_i]

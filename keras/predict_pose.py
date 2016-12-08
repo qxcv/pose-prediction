@@ -8,7 +8,7 @@ from keras import backend as K
 import h5py
 import numpy as np
 
-from common import huber_loss, unmap_predictions, convert_2d_seq, pck
+from common import huber_loss, unmap_predictions, convert_2d_seq, pck, THRESHOLDS
 
 np.random.seed(2372143511)
 
@@ -16,7 +16,6 @@ np.random.seed(2372143511)
 OFFSETS = [30]
 TAP_SUBSAMPLE = 5
 TAP_COUNT = 10
-THRESHOLDS = [0.05, 0.15, 0.25, 0.5, 0.8]
 
 
 def train_model(train_X, train_Y, val_X, val_Y):
@@ -162,10 +161,10 @@ if __name__ == '__main__':
     np.save('val_gt.npy', gt)
 
     pred_pcks = pck(gt, val_preds, THRESHOLDS, OFFSETS)
-    ext_pcks = pck(gt, val_preds, THRESHOLDS, OFFSETS)
+    ext_pcks = pck(gt, extend_preds, THRESHOLDS, OFFSETS)
     assert pred_pcks.keys() == ext_pcks.keys()
-    print('metric\t\tpred\t\text')
-    for k in pred_pcks.keys:
+    print('metric\t\t\tpred\t\t\text')
+    for k in pred_pcks.keys():
         print('{}\t\t{:g}\t\t{:g}'.format(k, pred_pcks[k], ext_pcks[k]))
 
 # TODOs:

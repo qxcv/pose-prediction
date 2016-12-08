@@ -8,7 +8,7 @@ from keras.callbacks import ModelCheckpoint, EarlyStopping
 import h5py
 import numpy as np
 
-from common import huber_loss, convert_2d_seq
+from common import huber_loss, convert_2d_seq, unmap_predictions, pck, THRESHOLDS
 
 np.random.seed(2372143511)
 
@@ -16,26 +16,61 @@ np.random.seed(2372143511)
 # SEQ_LENGTH - 1
 SEQ_LENGTH = 129
 
+
+def make_model_train(shape):
+    # Shape is (t, d), so step_data_size is size of data passed to the LSTM at
+    # each time step.
+    step_data_size = shape[-1]
+
+    x = in_layer = Input(shape=shape)
+    x = LSTM(128, return_sequences=True)(x)
+    x = TimeDistributed(Dense(128))(x)
+    x = Activation('relu')(x)
+    out_layer = TimeDistributed(Dense(step_data_size))(x)
+
+    model = Model(input=[in_layer], output=[out_layer])
+
+    return model
+
+
+def make_model_predict(train_model):
+    # Training on a stateless model is easy, but we need a stateful model to
+    # make real predictions. Hence, we have to do this stupid Caffe-style
+    # nonsense.
+    assert len(train_model.input_shape) == 3
+
+    step_data_size = train_model.input_shape[2]
+
+    x = in_layer = Input(batch_shape=(1, 1, step_data_size))
+    x = LSTM(128, return_sequences=True, stateful=True)(x)
+    x = TimeDistributed(Dense(128))(x)
+    x = Activation('relu')(x)
+    out_layer = TimeDistributed(Dense(step_data_size))(x)
+
+    pred_model = Model(input=[in_layer], output=[out_layer])
+
+    pred_model.compile(optimizer='rmsprop', loss=huber_loss)
+
+    assert len(pred_model.layers) == len(train_model.layers)
+
+    for new_layer, orig_layer in zip(pred_model.layers, train_model.layers):
+        new_layer.set_weights(orig_layer.get_weights())
+
+    return pred_model
+
+
 def train_model(train_X, train_Y, val_X, val_Y):
     assert train_X.ndim == 3
     step_data_size = train_X.shape[-1]
 
-    x = in_layer = Input(shape=train_X.shape[1:])
-    x = TimeDistributed(BatchNormalization())(x)
-    x = LSTM(128, return_sequences=True)(x)
-    x = TimeDistributed(Dense(128))(x)
-    x = Activation('relu')(x)
-    x = TimeDistributed(BatchNormalization())(x)
-    out_layer = TimeDistributed(Dense(step_data_size))(x)
-
-    model = Model(input=[in_layer], output=[out_layer])
+    model = make_model_train(train_X.shape[1:])
 
     objective = huber_loss
     model.compile(optimizer='rmsprop', loss=objective, metrics=[objective])
 
     print('Fitting to data')
     mod_check = ModelCheckpoint('./best-lstm-weights.h5', save_best_only=True)
-    estop = EarlyStopping(min_delta=0, patience=25)
+    estop = EarlyStopping(min_delta=0, patience=250)
     # TODO: Need curriculum learning for forecasting to work properly
     model.fit(train_X,
               train_Y,
@@ -91,6 +126,38 @@ def load_data():
         return prepare_data(fp)
 
 
+def scrape_sequences(model, data, num_to_scrape):
+    """Run the LSTM model over some data one step at a time for
+    (SEQ_LENGTH-1)/2 samples, then try to predict over the rest of the
+    sequence. Do that num_to_scrape times, choosing samples randomly."""
+    sel_indices = np.random.choice(np.arange(data.shape[0]),
+                                   size=num_to_scrape,
+                                   replace=True)
+
+    assert data.ndim == 3
+    assert data.shape[1] == SEQ_LENGTH
+
+    train_k = data.shape[1] // 2
+    all_preds = np.zeros((num_to_scrape,) + data.shape[1:])
+
+    for pi, ind in enumerate(sel_indices):
+        seq = data[ind]
+        model.reset_states()
+        preds = np.zeros(data.shape[1:])
+
+        # Feed on GT
+        for i in range(train_k):
+            preds[i, :] = model.predict(seq[i].reshape((1, 1, -1)))
+
+        # Feed on own preds
+        for i in range(train_k, data.shape[1]):
+            preds[i, :] = model.predict(preds[i-1, :].reshape((1, 1, -1)))
+
+        all_preds[pi, :, :] = preds
+
+    return all_preds
+
+
 if __name__ == '__main__':
     print('Loading data')
     train_X, train_Y, val_X, val_Y = load_data()
@@ -105,16 +172,24 @@ if __name__ == '__main__':
     if model is None:
         model = train_model(train_X, train_Y, val_X, val_Y)
 
-    # Compare against 'extend' baseline, as per usual
-    # TODO: This is a poor approach; I really need to predict out to a few
-    # frames and check PCK. Having a visualisation wouldn't hurt either
-    # (although that can be done on my side).
     print('Checking prediction accuracy')
-    # gt = unmap_predictions(val_Y, n=len(OFFSETS))
-    # val_preds = unmap_predictions(model.predict(val_X), n=len(OFFSETS))
-    # extend_preds = unmap_predictions(np.repeat(val_X[:, -16:], len(OFFSETS),
-    #                                            axis=1),
-    #                                  n=len(OFFSETS))
-    # np.save('val_pred_lstm.npy', val_preds)
-    # np.save('val_ext_lstm.npy', extend_preds)
-    # np.save('val_gt_lstm.npy', gt)
+    n = val_X.shape[1] - 1
+    gt = unmap_predictions(val_Y[:, 1:], n)
+    val_preds = unmap_predictions(model.predict(val_X)[:, :-1], n)
+    extend_preds = unmap_predictions(val_X[:, :-1], n)
+    np.save('val_pred_lstm.npy', val_preds)
+    np.save('val_ext_lstm.npy', extend_preds)
+    np.save('val_gt_lstm.npy', gt)
+
+    pred_pcks = pck(gt, val_preds, THRESHOLDS, np.arange(n))
+    ext_pcks = pck(gt, extend_preds, THRESHOLDS, np.arange(n))
+    assert pred_pcks.keys() == ext_pcks.keys()
+    print('metric\t\t\tpred\t\t\text')
+    for k in pred_pcks.keys():
+        print('{}\t\t{:g}\t\t{:g}'.format(k, pred_pcks[k], ext_pcks[k]))
+
+    print('Scraping predictions')
+    pred_model = make_model_predict(model)
+    mapped_results = scrape_sequences(pred_model, val_X, 100)
+    results = unmap_predictions(mapped_results, n=val_X.shape[1])
+    np.save('lstm_scrapes.npy', results)
