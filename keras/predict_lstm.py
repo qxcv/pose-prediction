@@ -75,14 +75,14 @@ def train_model(train_X, train_Y, val_X, val_Y):
     estop = EarlyStopping(min_delta=0, patience=250)
     sig = train_X.std()
     ramper = GaussianRamper(patience=50, schedule=sig * np.array([
-        0.001, 0.005, 0.01, 0.05, 0.1, 0.2, 0.3
+        1e-6, 0.001, 0.002, 0.004, 0.008, 0.01, 0.05
     ]))
     callbacks = [
         mod_check, estop, ramper
     ]
     model.fit(train_X,
               train_Y,
-              # batch_size=256,
+              # batch_size=64,
               validation_data=(val_X, val_Y),
               nb_epoch=2000,
               shuffle=True,

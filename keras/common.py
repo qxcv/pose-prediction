@@ -71,16 +71,7 @@ def unmap_predictions(seq, n=1):
     return rv
 
 
-def _ax_hmfy(ax_loc, length, std):
-    # Trying to reshape so that we get an output which is (num joints * length)
-    x = np.arange(length)
-    y = norm.pdf(x, loc=ax_loc, scale=std)
-    assert ax_locs.ndim == 1
-    broad_locs = ax_locs.reshape((-1, 1))
-    norm.pdf(x)
-
-
-def heatmapify(pose, size, std=1.5):
+def heatmapify(pose, size, std):
     """Convert a pose to a rows*cols*joints heatmap. Size is rows * cols."""
     assert pose.ndim == 2 and pose.shape[0] == 2
     njoints = pose.shape[1]
@@ -108,6 +99,18 @@ def unheatmapify(heatmap):
     # is meant to be y coords (rows)
     rv = np.vstack([cols, rows])
     assert rv.shape == (2, njoints)
+    return rv
+
+
+def heatmapify_batch(poses, size, std=1.5):
+    assert poses.ndim == 4 and poses.shape[2] == 2, poses.shape
+    B, T, _, J = poses.shape
+    rows, cols = size
+    rv = np.zeros((B, T, rows, cols, J), dtype='float32')
+    for b in range(B):
+        for t in range(T):
+            pose = poses[b, t]
+            rv[b, t] = heatmapify(pose, size, std)
     return rv
 
 

@@ -7,92 +7,99 @@ input and gave forecasted poses as output. This model takes in pose maps as
 input and gives forecasted poses (at time t+K) as output."""
 
 from keras.models import Model, load_model
-from keras.layers import Input, Dense, Activation, LSTM, TimeDistributed
+from keras.layers import Input, Activation, TimeDistributed, \
+    BatchNormalization, Convolution2D, ConvLSTM2D
+import keras.backend as K
 from keras.callbacks import ModelCheckpoint, EarlyStopping
 import h5py
 import numpy as np
 
-from common import huber_loss, convert_2d_seq, unmap_predictions, pck, \
-    THRESHOLDS, VariableGaussianNoise, GaussianRamper, CUSTOM_OBJECTS
+from common import CUSTOM_OBJECTS, heatmapify_batch
 
 np.random.seed(2372143511)
 
 # Will result in learning mappings from sequences of SEQ_LENGTH - 1 to
 # SEQ_LENGTH - 1
 SEQ_LENGTH = 129
+FRAME_SIZE = 32
+WEIGHTS = './best-erd-weights.h5'
 
 
 def make_model_train(shape):
-    # Shape is (t, d), so step_data_size is size of data passed to the LSTM at
-    # each time step.
-    step_data_size = shape[-1]
+    timesteps, rows, cols, njoints = shape
 
-    x = in_layer = Input(shape=shape)
-    x = VariableGaussianNoise(sigma=0.01)(x)
-    x = LSTM(128, return_sequences=True)(x)
-    x = TimeDistributed(Dense(128))(x)
-    x = Activation('relu')(x)
-    out_layer = TimeDistributed(Dense(step_data_size))(x)
+    # TODO: These channel counts are probably quite a bit too low. Need to bump
+    # a bit.
+
+    # Input layer (BN just for scaling)
+    x = in_layer = Input(shape=(timesteps, rows, cols, njoints))
+    x = TimeDistributed(BatchNormalization())(x)
+
+    # Encoder
+    for i in range(3):
+        x = TimeDistributed(Convolution2D(64, 3, 3, border_mode='same'))(x)
+        x = TimeDistributed(Activation('relu'))(x)
+        x = TimeDistributed(BatchNormalization())(x)
+
+    # Recurrent
+    x = ConvLSTM2D(64, 3, 3, border_mode='same', return_sequences=True)(x)
+
+    # Decoder
+    x = TimeDistributed(Convolution2D(64, 3, 3, border_mode='same'))(x)
+    x = TimeDistributed(Activation('relu'))(x)
+    out_layer = x = TimeDistributed(Convolution2D(njoints, 3, 3, border_mode='same'))(x)
 
     model = Model(input=[in_layer], output=[out_layer])
 
     return model
 
 
-def make_model_predict(train_model):
-    # Training on a stateless model is easy, but we need a stateful model to
-    # make real predictions. Hence, we have to do this stupid Caffe-style
-    # nonsense.
-    assert len(train_model.input_shape) == 3
+def train_model(train_gen, val_gen, data_shape):
+    model = make_model_train(data_shape)
 
-    step_data_size = train_model.input_shape[2]
-
-    x = in_layer = Input(batch_shape=(1, 1, step_data_size))
-    x = VariableGaussianNoise(sigma=1e-10)(x)
-    x = LSTM(128, return_sequences=True, stateful=True)(x)
-    x = TimeDistributed(Dense(128))(x)
-    x = Activation('relu')(x)
-    out_layer = TimeDistributed(Dense(step_data_size))(x)
-
-    pred_model = Model(input=[in_layer], output=[out_layer])
-
-    pred_model.compile(optimizer='rmsprop', loss=huber_loss)
-
-    assert len(pred_model.layers) == len(train_model.layers)
-
-    for new_layer, orig_layer in zip(pred_model.layers, train_model.layers):
-        new_layer.set_weights(orig_layer.get_weights())
-
-    return pred_model
-
-
-def train_model(train_X, train_Y, val_X, val_Y):
-    assert train_X.ndim == 3
-
-    model = make_model_train(train_X.shape[1:])
-
-    objective = huber_loss
-    model.compile(optimizer='rmsprop', loss=objective, metrics=[objective])
+    model.compile(optimizer='rmsprop', loss='mse', metrics=['mse'])
 
     print('Fitting to data')
-    mod_check = ModelCheckpoint('./best-lstm-weights.h5', save_best_only=True)
+    mod_check = ModelCheckpoint(WEIGHTS, save_best_only=True)
     estop = EarlyStopping(min_delta=0, patience=250)
-    sig = train_X.std()
-    ramper = GaussianRamper(patience=50, schedule=sig * np.array([
-        0.01, 0.05, 0.1, 0.2, 0.3, 0.4, 0.5
-    ]))
     callbacks = [
-        mod_check, estop, ramper
+        mod_check, estop
     ]
-    model.fit(train_X,
-              train_Y,
-              # batch_size=256,
-              validation_data=(val_X, val_Y),
-              nb_epoch=2000,
-              shuffle=True,
-              callbacks=callbacks)
+    model.fit_generator(train_gen,
+                        samples_per_epoch=10000,
+                        nb_epoch=2000,
+                        validation_data=val_gen,
+                        nb_val_samples=100,
+                        callbacks=callbacks)
 
     return model
+
+
+def box_seq(seq, side=FRAME_SIZE, margin=3):
+    """Rescale sequence to be side*side (with margin containing no joints)."""
+    # XXX: This is going to cause a lot of camera movement between frames. Is
+    # it really a good idea?
+    mins = seq.min(axis=2)
+    maxs = seq.max(axis=2)
+    # scale for each frame is size of box required to contain pose
+    scales = np.abs(maxs - mins).max(axis=1)
+    mids = (maxs + mins) / 2.0
+    seq -= mids.reshape(mids.shape + (1,))
+    seq /= scales.reshape(scales.shape + (1, 1))
+    seq += 0.5
+    # now everything is in [0, 1], so we can put it into [margin, side-margin]
+    seq = (side - 2 * margin) * seq + margin
+    return seq
+
+
+def _data_generator(data, batch_size=1):
+    while True:
+        ordering = np.random.permutation(len(data))
+        for start in range(0, len(data) - batch_size + 1, batch_size):
+            inds = ordering[start:start+batch_size]
+            batch_poses = data[inds]
+            batch_heatmaps = heatmapify_batch(batch_poses, (FRAME_SIZE, FRAME_SIZE))
+            yield (batch_heatmaps[:, :-1], batch_heatmaps[:, 1:])
 
 
 def prepare_data(fp, val_frac=0.2):
@@ -103,15 +110,11 @@ def prepare_data(fp, val_frac=0.2):
             continue
         ds = fp[ds_name]
         poses = ds.value
-
-        # Ensure that all sequences are of the same length so that we don't
-        # have to mask
-        converted = convert_2d_seq(poses)
-        seqs = []
-        for start in range(0, len(converted) - SEQ_LENGTH + 1, SEQ_LENGTH):
-            seqs.append(converted[start:start+SEQ_LENGTH])
-
-        data.extend(seqs)
+        # split the poses into groups of SEQ_LENGTH, then box them individually
+        for start in range(0, len(poses) - SEQ_LENGTH + 1, SEQ_LENGTH):
+            subseq = poses[start:start+SEQ_LENGTH]
+            boxed = box_seq(subseq)
+            data.append(boxed)
 
     data = np.stack(data)
 
@@ -122,15 +125,10 @@ def prepare_data(fp, val_frac=0.2):
     val_inds = indices[:required_val]
     train_inds = indices[required_val:]
 
-    X = data[:, :-1, :]
-    Y = data[:, 1:, :]
+    train_gen = _data_generator(data[train_inds])
+    val_gen = _data_generator(data[val_inds])
 
-    train_X = X[train_inds]
-    train_Y = Y[train_inds]
-    val_X = X[val_inds]
-    val_Y = Y[val_inds]
-
-    return train_X, train_Y, val_X, val_Y
+    return train_gen, val_gen
 
 
 def load_data():
@@ -138,73 +136,21 @@ def load_data():
         return prepare_data(fp)
 
 
-def scrape_sequences(model, data, num_to_scrape):
-    """Run the LSTM model over some data one step at a time for
-    (SEQ_LENGTH-1)/2 samples, then try to predict over the rest of the
-    sequence. Do that num_to_scrape times, choosing samples randomly."""
-    sel_indices = np.random.choice(np.arange(data.shape[0]),
-                                   size=num_to_scrape,
-                                   replace=True)
-
-    assert data.ndim == 3
-    assert data.shape[1] == SEQ_LENGTH - 1
-
-    train_k = data.shape[1] // 2
-    all_preds = np.zeros((num_to_scrape,) + data.shape[1:])
-
-    for pi, ind in enumerate(sel_indices):
-        seq = data[ind]
-        model.reset_states()
-        preds = np.zeros(data.shape[1:])
-
-        # Feed on GT
-        for i in range(train_k):
-            preds[i, :] = model.predict(seq[i].reshape((1, 1, -1)))
-
-        # Feed on own preds
-        for i in range(train_k, data.shape[1]):
-            preds[i, :] = model.predict(preds[i-1, :].reshape((1, 1, -1)))
-
-        all_preds[pi, :, :] = preds
-
-    return all_preds
-
-
 if __name__ == '__main__':
     print('Loading data')
-    train_X, train_Y, val_X, val_Y = load_data()
+    train_gen, val_gen = load_data()
     print('Data loaded')
 
     assert K.image_dim_ordering() == 'tf', \
-        "Expecting TensorFlow dim ordering (even with Theano backend)"
+        "Expecting TensorFlow dim ordering (even with Theano back end)"
 
     model = None
     try:
         print('Loading model')
-        model = load_model('./best-lstm-weights.h5', CUSTOM_OBJECTS)
+        model = load_model(WEIGHTS, CUSTOM_OBJECTS)
     except OSError:
         print('Load failed, building model anew')
     if model is None:
-        model = train_model(train_X, train_Y, val_X, val_Y)
-
-    print('Checking prediction accuracy')
-    n = val_X.shape[1] - 1
-    gt = unmap_predictions(val_Y[:, 1:], n)
-    val_preds = unmap_predictions(model.predict(val_X)[:, :-1], n)
-    extend_preds = unmap_predictions(val_X[:, :-1], n)
-    np.save('val_pred_lstm.npy', val_preds)
-    np.save('val_ext_lstm.npy', extend_preds)
-    np.save('val_gt_lstm.npy', gt)
-
-    pred_pcks = pck(gt, val_preds, THRESHOLDS, np.arange(n))
-    ext_pcks = pck(gt, extend_preds, THRESHOLDS, np.arange(n))
-    assert pred_pcks.keys() == ext_pcks.keys()
-    print('metric\t\t\tpred\t\t\text')
-    for k in pred_pcks.keys():
-        print('{}\t\t{:g}\t\t{:g}'.format(k, pred_pcks[k], ext_pcks[k]))
-
-    print('Scraping predictions')
-    pred_model = make_model_predict(model)
-    mapped_results = scrape_sequences(pred_model, val_X, 100)
-    results = unmap_predictions(mapped_results, n=val_X.shape[1])
-    np.save('lstm_scrapes.npy', results)
+        # TODO: Get data_shape in a more sane way
+        data_shape = (SEQ_LENGTH - 1, FRAME_SIZE, FRAME_SIZE, 8)
+        model = train_model(train_gen, val_gen, data_shape)
