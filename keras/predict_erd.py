@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 
-"""LSTM-based model for predicting poses, one frame at a time"""
+"""Encoder-recurrent-decoder architecture for forecasting.
+
+Not the same as the original ERD model for forecasting! They took images as
+input and gave forecasted poses as output. This model takes in pose maps as
+input and gives forecasted poses (at time t+K) as output."""
 
 from keras.models import Model, load_model
 from keras.layers import Input, Dense, Activation, LSTM, TimeDistributed
@@ -75,7 +79,7 @@ def train_model(train_X, train_Y, val_X, val_Y):
     estop = EarlyStopping(min_delta=0, patience=250)
     sig = train_X.std()
     ramper = GaussianRamper(patience=50, schedule=sig * np.array([
-        0.001, 0.005, 0.01, 0.05, 0.1, 0.2, 0.3
+        0.01, 0.05, 0.1, 0.2, 0.3, 0.4, 0.5
     ]))
     callbacks = [
         mod_check, estop, ramper
@@ -170,6 +174,9 @@ if __name__ == '__main__':
     print('Loading data')
     train_X, train_Y, val_X, val_Y = load_data()
     print('Data loaded')
+
+    assert K.image_dim_ordering() == 'tf', \
+        "Expecting TensorFlow dim ordering (even with Theano backend)"
 
     model = None
     try:

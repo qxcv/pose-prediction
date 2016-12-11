@@ -6,6 +6,7 @@ from keras import backend as K
 from keras.callbacks import Callback
 from keras.layers import Layer
 import numpy as np
+from scipy.stats import norm
 
 PA = [0, 0, 1, 2, 3, 1, 5, 6]
 THRESHOLDS = [0.05, 0.15, 0.25, 0.5, 0.8]
@@ -70,13 +71,44 @@ def unmap_predictions(seq, n=1):
     return rv
 
 
-def heatmapify(pose, std=1.5):
-    """Convert a pose to a heatmap"""
-    pass
+def _ax_hmfy(ax_loc, length, std):
+    # Trying to reshape so that we get an output which is (num joints * length)
+    x = np.arange(length)
+    y = norm.pdf(x, loc=ax_loc, scale=std)
+    assert ax_locs.ndim == 1
+    broad_locs = ax_locs.reshape((-1, 1))
+    norm.pdf(x)
+
+
+def heatmapify(pose, size, std=1.5):
+    """Convert a pose to a rows*cols*joints heatmap. Size is rows * cols."""
+    assert pose.ndim == 2 and pose.shape[0] == 2
+    njoints = pose.shape[1]
+    rows, cols = size
+    rv = np.zeros((rows, cols, njoints))
+    row_x = np.arange(rows)
+    col_x = np.arange(cols)
+    for j in range(njoints):
+        joint_col, joint_row = pose[:, j]
+        row_dist = norm.pdf(row_x, loc=joint_row, scale=std)
+        col_dist = norm.pdf(col_x, loc=joint_col, scale=std)
+        rv[:, :, j] = np.outer(row_dist, col_dist)
+    return rv
+
 
 def unheatmapify(heatmap):
     """Convert a heatmap back to a set of coordinates (taking the mode)"""
-    pass
+    assert heatmap.ndim == 3
+    njoints = heatmap.shape[2]
+    rv = np.zeros((2, njoints))
+    # ravel inner dimensions of heatmap, then recover coordinates for each
+    shaped = heatmap.reshape((-1, njoints))
+    rows, cols = np.unravel_index(shaped.argmax(axis=0), heatmap.shape[:2])
+    # we do [cols, rows] because rv[0] is meant to be x coords (cols) and rv[1]
+    # is meant to be y coords (rows)
+    rv = np.vstack([cols, rows])
+    assert rv.shape == (2, njoints)
+    return rv
 
 
 def pck(y_true, y_pred, threshs, offsets):
@@ -177,7 +209,7 @@ class GaussianRamper(Callback):
         expired = self.waiting > self.patience
         if expired or improved:
             # If we've improved or run out of time, reset counters
-            self.best_loss = epoch_loss
+            self.best_loss = epoch_loss if improved else float('inf')
             self.waiting = 0
         if expired and not improved:
             self.update_sigma = True
