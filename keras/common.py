@@ -3,23 +3,22 @@
 from collections import OrderedDict
 
 from keras import backend as K
-from keras import objectives, metrics
+from keras.callbacks import Callback
+from keras.layers import Layer
 import numpy as np
 
 PA = [0, 0, 1, 2, 3, 1, 5, 6]
 THRESHOLDS = [0.05, 0.15, 0.25, 0.5, 0.8]
+# Dictionary to pass to load_model, etc., to find custom objectives and layers
+CUSTOM_OBJECTS = {}
 
 
-def huber_loss(y_true, y_pred):
-    diff = y_true - y_pred
-    diff_abs = K.abs(diff)
-    error_abs = diff_abs - 0.5
-    error_sq = (diff ** 2) / 2.0
-    merged = K.switch(diff_abs <= 1.0, error_sq, error_abs)
-    return K.mean(merged)
-# This helps Keras model loader find huber_loss
-objectives.huber_loss = huber_loss
-metrics.huber_loss = huber_loss
+def custom(thing):
+    """Decorator to register a custom object"""
+    name = thing.__name__
+    assert name not in CUSTOM_OBJECTS, "Duplicate object %s" % name
+    CUSTOM_OBJECTS[name] = thing
+    return thing
 
 
 def convert_2d_seq(seq):
@@ -71,6 +70,15 @@ def unmap_predictions(seq, n=1):
     return rv
 
 
+def heatmapify(pose, std=1.5):
+    """Convert a pose to a heatmap"""
+    pass
+
+def unheatmapify(heatmap):
+    """Convert a heatmap back to a set of coordinates (taking the mode)"""
+    pass
+
+
 def pck(y_true, y_pred, threshs, offsets):
     """Calculate head-neck normalised PCK."""
 
@@ -93,3 +101,84 @@ def pck(y_true, y_pred, threshs, offsets):
             rv[label] = pck[off_i]
 
     return rv
+
+
+@custom
+def huber_loss(y_true, y_pred):
+    diff = y_true - y_pred
+    diff_abs = K.abs(diff)
+    error_abs = diff_abs - 0.5
+    error_sq = (diff ** 2) / 2.0
+    merged = K.switch(diff_abs <= 1.0, error_sq, error_abs)
+    return K.mean(merged)
+
+
+@custom
+class VariableGaussianNoise(Layer):
+    """Variant of GaussianNoise that you can turn up or down."""
+    def __init__(self, sigma, **kwargs):
+        self.supports_masking = True
+        self.sigma = K.variable(sigma)
+        self.uses_learning_phase = True
+        super(VariableGaussianNoise, self).__init__(**kwargs)
+
+    def call(self, x, mask=None):
+        noise_x = x + K.random_normal(shape=K.shape(x),
+                                      mean=0.,
+                                      std=self.sigma)
+        return K.in_train_phase(noise_x, x)
+
+    def get_sigma(self):
+        return K.get_value(self.sigma)
+
+    def set_sigma(self, new_sigma):
+        K.set_value(self.sigma, new_sigma)
+
+    def get_config(self):
+        config = {'sigma': K.get_value(self.sigma)}
+        base_config = super(VariableGaussianNoise, self).get_config()
+        return dict(list(base_config.items()) + list(config.items()))
+
+
+class GaussianRamper(Callback):
+    """Ramps up magnitude of Gaussian noise as model converges."""
+    def __init__(self, patience, schedule, quantity='val_loss'):
+        self.sched_iter = iter(schedule)
+        self.waiting = 0
+        self.best_loss = float('inf')
+        self.quantity = quantity
+        self.update_sigma = True
+        self.patience = patience
+
+    def get_noise_layers(self):
+        for layer in self.model.layers:
+            if isinstance(layer, VariableGaussianNoise):
+                yield layer
+
+    def on_epoch_begin(self, epoch, logs={}):
+        """Do noise update at beginning of epoch instead of the end. This
+        ensures that we always update during the first epoch."""
+        if self.update_sigma:
+            self.update_sigma = False
+            try:
+                next_noise = next(self.sched_iter)
+            except StopIteration:
+                print('Ramper out of patience, but schedule exhausted')
+                return
+            n = 0
+            for layer in self.get_noise_layers():
+                layer.set_sigma(next_noise)
+                n += 1
+            print('Ramping Gaussian noise up to %g on %d layers' % (next_noise, n))
+
+    def on_epoch_end(self, epoch, logs):
+        epoch_loss = logs[self.quantity]
+        improved = epoch_loss < self.best_loss
+        expired = self.waiting > self.patience
+        if expired or improved:
+            # If we've improved or run out of time, reset counters
+            self.best_loss = epoch_loss
+            self.waiting = 0
+        if expired and not improved:
+            self.update_sigma = True
+        self.waiting += 1

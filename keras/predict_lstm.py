@@ -3,12 +3,13 @@
 """LSTM-based model for predicting poses, one frame at a time"""
 
 from keras.models import Model, load_model
-from keras.layers import Input, Dense, Activation, LSTM, TimeDistributed, BatchNormalization
+from keras.layers import Input, Dense, Activation, LSTM, TimeDistributed
 from keras.callbacks import ModelCheckpoint, EarlyStopping
 import h5py
 import numpy as np
 
-from common import huber_loss, convert_2d_seq, unmap_predictions, pck, THRESHOLDS
+from common import huber_loss, convert_2d_seq, unmap_predictions, pck, \
+    THRESHOLDS, VariableGaussianNoise, GaussianRamper, CUSTOM_OBJECTS
 
 np.random.seed(2372143511)
 
@@ -23,6 +24,7 @@ def make_model_train(shape):
     step_data_size = shape[-1]
 
     x = in_layer = Input(shape=shape)
+    x = VariableGaussianNoise(sigma=0.01)(x)
     x = LSTM(128, return_sequences=True)(x)
     x = TimeDistributed(Dense(128))(x)
     x = Activation('relu')(x)
@@ -42,6 +44,7 @@ def make_model_predict(train_model):
     step_data_size = train_model.input_shape[2]
 
     x = in_layer = Input(batch_shape=(1, 1, step_data_size))
+    x = VariableGaussianNoise(sigma=1e-10)(x)
     x = LSTM(128, return_sequences=True, stateful=True)(x)
     x = TimeDistributed(Dense(128))(x)
     x = Activation('relu')(x)
@@ -61,7 +64,6 @@ def make_model_predict(train_model):
 
 def train_model(train_X, train_Y, val_X, val_Y):
     assert train_X.ndim == 3
-    step_data_size = train_X.shape[-1]
 
     model = make_model_train(train_X.shape[1:])
 
@@ -71,14 +73,20 @@ def train_model(train_X, train_Y, val_X, val_Y):
     print('Fitting to data')
     mod_check = ModelCheckpoint('./best-lstm-weights.h5', save_best_only=True)
     estop = EarlyStopping(min_delta=0, patience=250)
-    # TODO: Need curriculum learning for forecasting to work properly
+    sig = train_X.std()
+    ramper = GaussianRamper(patience=50, schedule=sig * np.array([
+        0.01, 0.05, 0.1, 0.2, 0.3, 0.4, 0.5
+    ]))
+    callbacks = [
+        mod_check, estop, ramper
+    ]
     model.fit(train_X,
               train_Y,
               # batch_size=256,
               validation_data=(val_X, val_Y),
               nb_epoch=2000,
               shuffle=True,
-              callbacks=[mod_check, estop])
+              callbacks=callbacks)
 
     return model
 
@@ -135,7 +143,7 @@ def scrape_sequences(model, data, num_to_scrape):
                                    replace=True)
 
     assert data.ndim == 3
-    assert data.shape[1] == SEQ_LENGTH
+    assert data.shape[1] == SEQ_LENGTH - 1
 
     train_k = data.shape[1] // 2
     all_preds = np.zeros((num_to_scrape,) + data.shape[1:])
@@ -166,7 +174,7 @@ if __name__ == '__main__':
     model = None
     try:
         print('Loading model')
-        model = load_model('./best-lstm-weights.h5')
+        model = load_model('./best-lstm-weights.h5', CUSTOM_OBJECTS)
     except OSError:
         print('Load failed, building model anew')
     if model is None:
