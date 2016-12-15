@@ -85,10 +85,8 @@ def train_model(train_X, train_Y, val_X, val_Y):
     print('Fitting to data')
     mod_check = ModelCheckpoint(WEIGHTS_PATH, save_best_only=True)
     estop = EarlyStopping(min_delta=0, patience=100)
-    sig = train_X.std()
-    # XXX: Patience should be higher. Also, it seems like the schedule has NaNs
-    # in it or something (!!)
-    ramper = GaussianRamper(patience=10, schedule=sig * NOISE_SCHEDULE)
+    # TODO: Patience should be higher.
+    ramper = GaussianRamper(patience=10, schedule=NOISE_SCHEDULE)
     callbacks = [
         mod_check, estop, ramper
     ]

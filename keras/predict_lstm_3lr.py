@@ -70,8 +70,7 @@ def train_model(train_X, train_Y, val_X, val_Y):
     print('Fitting to data')
     mod_check = ModelCheckpoint(WEIGHTS_PATH, save_best_only=True)
     estop = EarlyStopping(min_delta=0, patience=100)
-    sig = train_X.std()
-    ramper = GaussianRamper(patience=10, schedule=sig * NOISE_SCHEDULE)
+    ramper = GaussianRamper(patience=10, schedule=NOISE_SCHEDULE)
     callbacks = [
         mod_check, estop, ramper
     ]
@@ -101,11 +100,6 @@ if __name__ == '__main__':
     if model is None:
         model = train_model(train_X, train_Y, val_X, val_Y)
 
-    print('Scraping predictions')
-    pred_model = make_model_predict(model)
-    results = scrape_sequences(pred_model, val_X, 1, SEQ_LENGTH)
-    assert results.ndim == 3 and results.shape[0] == 1, results.shape
-    to_write = insert_junk_entries(results[0])
     print('Computing l2 losses from sampled poses')
     pred_model = make_model_predict(model)
     print('{:>12} {:>12}'.format('+t (ms)', 'l2 loss'))

@@ -75,7 +75,6 @@ def get_offset_losses(model, test_X, test_Y, test_means, test_stds, to_sample=10
     # Use the first half of the sequence as a prefix
     train_k = test_X.shape[1] // 2
     losses = {}
-    true_Y = test_Y * test_stds + test_means
 
     for pi, ind in enumerate(sel_indices):
         seq = test_X[ind]
@@ -88,10 +87,11 @@ def get_offset_losses(model, test_X, test_Y, test_means, test_stds, to_sample=10
         for i in range(train_k, test_X.shape[1]):
             preds[i, :] = model.predict(preds[i-1, :].reshape((1, 1, -1)))
 
+        mean, std = test_means[ind, 0], test_stds[ind, 0]
         for offset in PREDICT_OFFSETS:
             i = train_k + offset
-            pred = preds[i]
-            gt = true_Y[ind, i]
+            pred = preds[i] * std + mean
+            gt = test_Y[ind, i] * std + mean
             delta = np.linalg.norm(pred.flatten() - gt.flatten())
             losses.setdefault(offset, []).append(delta)
 
