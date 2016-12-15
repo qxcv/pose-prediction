@@ -8,7 +8,8 @@ from keras.callbacks import ModelCheckpoint, EarlyStopping
 import numpy as np
 
 from common import huber_loss, VariableGaussianNoise, GaussianRamper, \
-    CUSTOM_OBJECTS, load_mocap_data, scrape_sequences, insert_junk_entries
+    CUSTOM_OBJECTS, load_mocap_data, scrape_sequences, insert_junk_entries, \
+    NOISE_SCHEDULE
 
 np.random.seed(2372143511)
 
