@@ -11,14 +11,12 @@ import numpy as np
 
 from common import huber_loss, VariableGaussianNoise, GaussianRamper, \
     CUSTOM_OBJECTS, load_mocap_data, scrape_sequences, insert_junk_entries, \
-    NOISE_SCHEDULE
+    NOISE_SCHEDULE, get_offset_losses
 
 np.random.seed(2372143511)
 
 SEQ_LENGTH = 129
 WEIGHTS_PATH = './best-erd-3d-weights.h5'
-# Correspond to horizons of 80, 160, 240, 320, 400, 480, 560ms
-PREDICT_OFFSETS = [4, 8, 12, 16, 20, 24, 28]
 
 
 def make_model_train(shape):
@@ -88,7 +86,8 @@ def train_model(train_X, train_Y, val_X, val_Y):
     mod_check = ModelCheckpoint(WEIGHTS_PATH, save_best_only=True)
     estop = EarlyStopping(min_delta=0, patience=100)
     sig = train_X.std()
-    # TODO: Patience should probably be much higher
+    # XXX: Patience should be higher. Also, it seems like the schedule has NaNs
+    # in it or something (!!)
     ramper = GaussianRamper(patience=10, schedule=sig * NOISE_SCHEDULE)
     callbacks = [
         mod_check, estop, ramper
@@ -104,35 +103,10 @@ def train_model(train_X, train_Y, val_X, val_Y):
     return model
 
 
-def get_offset_losses(test_X, test_Y):
-    """Try to imitate ERD paper quant eval: compare true values of Y (after
-    adding mean/std) with fake values.
-
-    I really don't know what the ERD paper was actually using for quant eval,
-    though, so this will probably be some way from the right result :/"""
-
-    losses = {}
-
-    for pi, ind in enumerate(sel_indices):
-        seq = data[ind]
-        model.reset_states()
-        preds = np.zeros(data.shape[1:])
-
-        for i in range(train_k):
-            preds[i, :] = model.predict(seq[i].reshape((1, 1, -1)))
-
-        for i in range(train_k, data.shape[1]):
-            preds[i, :] = model.predict(preds[i-1, :].reshape((1, 1, -1)))
-
-        all_preds[pi, :, :] = preds
-        losses[offset].setdefault([])
-
-    return sorted((k, np.mean(v)) for k, v in losses.items())
-
-
 if __name__ == '__main__':
     print('Loading data')
-    train_X, train_Y, val_X, val_Y, test_seqs = load_mocap_data(SEQ_LENGTH)
+    (train_X, train_Y, train_means, train_stds,
+     val_X,   val_Y,   val_means,   val_stds) = load_mocap_data(SEQ_LENGTH)
     print('Data loaded')
 
     model = None
@@ -144,10 +118,14 @@ if __name__ == '__main__':
     if model is None:
         model = train_model(train_X, train_Y, val_X, val_Y)
 
-    print('Scraping predictions')
+    print('Computing l2 losses from sampled poses')
     pred_model = make_model_predict(model)
-    results = scrape_sequences(pred_model, val_X, 1, SEQ_LENGTH)
-    assert results.ndim == 3 and results.shape[0] == 1, results.shape
+    print('{:>12} {:>12}'.format('+t (ms)', 'l2 loss'))
+    for offset, mean_loss in get_offset_losses(pred_model, val_X, val_Y, val_means, val_stds):
+        # the *20 assumes frames are sampled at 50fps (so 1000/50ms per frame)
+        print('{:>12} {:>12}'.format(offset * 20, mean_loss))
+
+    print('Scraping predictions for visualisation')
+    results = scrape_sequences(pred_model, val_X, val_means, val_stds, 1, SEQ_LENGTH)
     to_write = insert_junk_entries(results[0])
     np.savetxt('prediction_erd.txt', to_write, delimiter=',')
-    # savemat('erd_3d_scrapes.mat', {'completions': results})

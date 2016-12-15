@@ -26,7 +26,8 @@ GOOD_MOCAP_INDS = [
 TRUE_NUM_ENTRIES = 99
 # Standard deviations for noise
 NOISE_SCHEDULE = [0.01, 0.05, 0.1, 0.2, 0.3, 0.5, 0.7]
-
+# Correspond to horizons of 80, 160, 240, 320, 400, 480, 560ms
+PREDICT_OFFSETS = [4, 8, 12, 16, 20, 24, 28]
 
 def insert_junk_entries(data):
     assert data.ndim == 2 and data.shape[1] == len(GOOD_MOCAP_INDS)
@@ -35,10 +36,10 @@ def insert_junk_entries(data):
     return rv
 
 
-def scrape_sequences(model, data, num_to_scrape, seq_length):
+def scrape_sequences(model, data, data_mean, data_std, num_to_scrape, seq_length):
     sel_indices = np.random.choice(np.arange(data.shape[0]),
                                    size=num_to_scrape,
-                                   replace=True)
+                                   replace=False)
 
     assert data.ndim == 3
     assert data.shape[1] == seq_length - 1
@@ -57,9 +58,44 @@ def scrape_sequences(model, data, num_to_scrape, seq_length):
         for i in range(train_k, data.shape[1]):
             preds[i, :] = model.predict(preds[i-1, :].reshape((1, 1, -1)))
 
-        all_preds[pi, :, :] = preds
+        all_preds[pi, :, :] = preds * data_std[ind] + data_mean[ind]
 
     return all_preds
+
+
+def get_offset_losses(model, test_X, test_Y, test_means, test_stds, to_sample=100):
+    """Try to imitate ERD paper quant eval: compare true values of Y (after
+    adding mean/std) with fake values.
+
+    I really don't know what the ERD paper was actually using for quant eval,
+    though, so this will probably be some way from the right result :/"""
+    sel_indices = np.random.choice(np.arange(test_X.shape[0]),
+                                   size=to_sample,
+                                   replace=False)
+    # Use the first half of the sequence as a prefix
+    train_k = test_X.shape[1] // 2
+    losses = {}
+    true_Y = test_Y * test_stds + test_means
+
+    for pi, ind in enumerate(sel_indices):
+        seq = test_X[ind]
+        model.reset_states()
+        preds = np.zeros(test_X.shape[1:])
+
+        for i in range(train_k):
+            preds[i, :] = model.predict(seq[i].reshape((1, 1, -1)))
+
+        for i in range(train_k, test_X.shape[1]):
+            preds[i, :] = model.predict(preds[i-1, :].reshape((1, 1, -1)))
+
+        for offset in PREDICT_OFFSETS:
+            i = train_k + offset
+            pred = preds[i]
+            gt = true_Y[ind, i]
+            delta = np.linalg.norm(pred.flatten() - gt.flatten())
+            losses.setdefault(offset, []).append(delta)
+
+    return sorted((k, np.mean(v)) for k, v in losses.items())
 
 
 def prepare_mocap_data(filename, seq_length):
@@ -91,10 +127,13 @@ def prepare_mocap_data(filename, seq_length):
     Y = (Y - mean) / std
 
     # This is sometimes useful for testing
-    full_seq = poses.reshape((1, ) + poses.shape)
-    full_seq = (full_seq - mean) / std
+    # full_seq = poses.reshape((1, ) + poses.shape)
+    # full_seq = (full_seq - mean) / std
 
-    return X, Y, full_seq
+    all_means = np.repeat(mean, X.shape[0], axis=0)
+    all_stds = np.repeat(std, X.shape[0], axis=0)
+
+    return X, Y, all_means, all_stds
 
 
 def load_mocap_data(seq_length):
@@ -102,34 +141,48 @@ def load_mocap_data(seq_length):
 
     filenames = glob('h36m-3d-poses/expmap_*.txt.gz')
 
+    train_mean_blocks = []
+    test_mean_blocks = []
+    train_std_blocks = []
+    test_std_blocks = []
     train_X_blocks = []
     train_Y_blocks = []
     test_X_blocks = []
     test_Y_blocks = []
-    test_seqs = []
+    # test_seqs = []
 
     for filename in filenames:
         base = path.basename(filename)
         meta = fnre.match(base).groupdict()
         subj_id = int(meta['subject'])
 
-        X, Y, full_seq = prepare_mocap_data(filename, seq_length)
+        X, Y, means, stds = prepare_mocap_data(filename, seq_length)
 
         if subj_id == 5:
             # subject 5 is for testing
             test_X_blocks.append(X)
             test_Y_blocks.append(Y)
-            test_seqs.append(full_seq)
+            test_mean_blocks.append(means)
+            test_std_blocks.append(stds)
+            # test_seqs.append(full_seq)
         else:
             train_X_blocks.append(X)
             train_Y_blocks.append(Y)
+            train_mean_blocks.append(means)
+            train_std_blocks.append(stds)
 
     train_X = np.concatenate(train_X_blocks, axis=0)
     train_Y = np.concatenate(train_Y_blocks, axis=0)
+    train_means = np.concatenate(train_mean_blocks, axis=0)
+    train_stds = np.concatenate(train_std_blocks, axis=0)
+
     test_X = np.concatenate(test_X_blocks, axis=0)
     test_Y = np.concatenate(test_Y_blocks, axis=0)
+    test_means = np.concatenate(test_mean_blocks, axis=0)
+    test_stds = np.concatenate(test_std_blocks, axis=0)
 
-    return train_X, train_Y, test_X, test_Y, test_seqs
+    return train_X, train_Y, train_means, train_stds, \
+           test_X,  test_Y,  test_means,  test_stds
 
 
 def custom(thing):
