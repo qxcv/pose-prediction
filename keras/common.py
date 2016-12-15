@@ -7,11 +7,125 @@ from keras.callbacks import Callback
 from keras.layers import Layer
 import numpy as np
 from scipy.stats import norm
+from glob import glob
+import re
+from os import path
 
 PA = [0, 0, 1, 2, 3, 1, 5, 6]
 THRESHOLDS = [0.05, 0.15, 0.25, 0.5, 0.8]
 # Dictionary to pass to load_model, etc., to find custom objectives and layers
 CUSTOM_OBJECTS = {}
+# Indices of nonzero features in expmap mocap inds. I have no idea why the
+# zeroed features are ever written out.
+GOOD_MOCAP_INDS = [
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 13, 14, 15, 21, 22, 23, 24, 27, 28, 29,
+    30, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 51, 52, 53, 54, 55, 56,
+    57, 60, 61, 62, 75, 76, 77, 78, 79, 80, 81, 84, 85, 86
+]
+# Remainder of the 99 entries are constant zero (apparently)
+TRUE_NUM_ENTRIES = 99
+
+
+def insert_junk_entries(data):
+    assert data.ndim == 2 and data.shape[1] == len(GOOD_MOCAP_INDS)
+    rv = np.zeros((data.shape[0], TRUE_NUM_ENTRIES))
+    rv[:, GOOD_MOCAP_INDS] = data
+    return rv
+
+
+def scrape_sequences(model, data, num_to_scrape, seq_length):
+    sel_indices = np.random.choice(np.arange(data.shape[0]),
+                                   size=num_to_scrape,
+                                   replace=True)
+
+    assert data.ndim == 3
+    assert data.shape[1] == seq_length - 1
+
+    train_k = data.shape[1] // 2
+    all_preds = np.zeros((num_to_scrape,) + data.shape[1:])
+
+    for pi, ind in enumerate(sel_indices):
+        seq = data[ind]
+        model.reset_states()
+        preds = np.zeros(data.shape[1:])
+
+        for i in range(train_k):
+            preds[i, :] = model.predict(seq[i].reshape((1, 1, -1)))
+
+        for i in range(train_k, data.shape[1]):
+            preds[i, :] = model.predict(preds[i-1, :].reshape((1, 1, -1)))
+
+        all_preds[pi, :, :] = preds
+
+    return all_preds
+
+
+def prepare_mocap_data(filename, seq_length):
+    poses = np.loadtxt(filename, delimiter=',')
+    assert poses.ndim == 2 and poses.shape[1] == 99, poses.shape
+
+    # Take out zero features
+    zero_inds, = np.nonzero((poses != 0).any(axis=0))
+    assert (zero_inds == GOOD_MOCAP_INDS).all(), zero_inds
+    poses = poses[:, GOOD_MOCAP_INDS]
+
+    seqs = []
+    for start in range(0, len(poses) - seq_length + 1, seq_length):
+        seqs.append(poses[start:start+seq_length])
+
+    data = np.stack(seqs)
+    X = data[:, :-1, :]
+    Y = data[:, 1:, :]
+
+    # ERD paper claims to be standardising inputs, but not outputs (?)
+    # XXX: That really doesn't make any sense. The L2 loss at the output will
+    # be pretty meaningless if features aren't standardised like they are at
+    # the input.
+    mean = poses.mean(axis=0).reshape((1, 1, -1))
+    std = poses.std(axis=0).reshape((1, 1, -1))
+    X = (X - mean) / std
+    # Y = (Y - mean) / std
+
+    # This is sometimes useful for testing
+    full_seq = poses.reshape((1, ) + poses.shape)
+    full_seq = (full_seq - mean) / std
+
+    return X, Y, full_seq
+
+
+def load_mocap_data(seq_length):
+    fnre = re.compile(r'^expmap_S(?P<subject>\d+)_(?P<action>.+).txt.gz$')
+
+    filenames = glob('h36m-3d-poses/expmap_*.txt.gz')
+
+    train_X_blocks = []
+    train_Y_blocks = []
+    test_X_blocks = []
+    test_Y_blocks = []
+    test_seqs = []
+
+    for filename in filenames:
+        base = path.basename(filename)
+        meta = fnre.match(base).groupdict()
+        subj_id = int(meta['subject'])
+
+        X, Y, full_seq = prepare_mocap_data(filename, seq_length)
+
+        if subj_id == 5:
+            # subject 5 is for testing
+            test_X_blocks.append(X)
+            test_Y_blocks.append(Y)
+            test_seqs.append(full_seq)
+        else:
+            train_X_blocks.append(X)
+            train_Y_blocks.append(Y)
+
+    train_X = np.concatenate(train_X_blocks, axis=0)
+    train_Y = np.concatenate(train_Y_blocks, axis=0)
+    test_X = np.concatenate(test_X_blocks, axis=0)
+    test_Y = np.concatenate(test_Y_blocks, axis=0)
+
+    return train_X, train_Y, test_X, test_Y, test_seqs
 
 
 def custom(thing):

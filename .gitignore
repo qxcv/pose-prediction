@@ -7,6 +7,7 @@ h3.6m
 new-poses/
 ref/
 todo.txt
+keras/h36m-3d-poses/
 
 # Editor cruft
 *.swp
