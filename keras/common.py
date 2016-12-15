@@ -24,6 +24,8 @@ GOOD_MOCAP_INDS = [
 ]
 # Remainder of the 99 entries are constant zero (apparently)
 TRUE_NUM_ENTRIES = 99
+# Standard deviations for noise
+NOISE_SCHEDULE = [0.01, 0.05, 0.1, 0.2, 0.3, 0.5, 0.7]
 
 
 def insert_junk_entries(data):
@@ -69,8 +71,12 @@ def prepare_mocap_data(filename, seq_length):
     assert (zero_inds == GOOD_MOCAP_INDS).all(), zero_inds
     poses = poses[:, GOOD_MOCAP_INDS]
 
+    # Allow sequences to overlap. This substantially increases the amount of
+    # training data when sequences are long.
     seqs = []
-    for start in range(0, len(poses) - seq_length + 1, seq_length):
+    end = len(poses) - seq_length + 1
+    step = min(seq_length, 50)
+    for start in range(0, end, step):
         seqs.append(poses[start:start+seq_length])
 
     data = np.stack(seqs)
@@ -78,13 +84,11 @@ def prepare_mocap_data(filename, seq_length):
     Y = data[:, 1:, :]
 
     # ERD paper claims to be standardising inputs, but not outputs (?)
-    # XXX: That really doesn't make any sense. The L2 loss at the output will
-    # be pretty meaningless if features aren't standardised like they are at
-    # the input.
+    # I standardise both anyway.
     mean = poses.mean(axis=0).reshape((1, 1, -1))
     std = poses.std(axis=0).reshape((1, 1, -1))
     X = (X - mean) / std
-    # Y = (Y - mean) / std
+    Y = (Y - mean) / std
 
     # This is sometimes useful for testing
     full_seq = poses.reshape((1, ) + poses.shape)
