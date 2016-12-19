@@ -29,6 +29,7 @@ NOISE_SCHEDULE = [0.01, 0.05, 0.1, 0.2, 0.3, 0.5, 0.7]
 # Correspond to horizons of 80, 160, 240, 320, 400, 480, 560ms
 PREDICT_OFFSETS = [4, 8, 12, 16, 20, 24, 28]
 
+
 def insert_junk_entries(data):
     assert data.ndim == 2 and data.shape[1] == len(GOOD_MOCAP_INDS)
     rv = np.zeros((data.shape[0], TRUE_NUM_ENTRIES))
@@ -36,7 +37,8 @@ def insert_junk_entries(data):
     return rv
 
 
-def scrape_sequences(model, data, data_mean, data_std, num_to_scrape, seq_length):
+def scrape_sequences(model, data, data_mean, data_std, num_to_scrape,
+                     seq_length):
     sel_indices = np.random.choice(np.arange(data.shape[0]),
                                    size=num_to_scrape,
                                    replace=False)
@@ -63,7 +65,8 @@ def scrape_sequences(model, data, data_mean, data_std, num_to_scrape, seq_length
     return all_preds
 
 
-def get_offset_losses(model, test_X, test_Y, test_means, test_stds, to_sample=100):
+def get_offset_losses(model, test_X, test_Y, test_means, test_stds,
+                      to_sample=100):
     """Try to imitate ERD paper quant eval: compare true values of Y (after
     adding mean/std) with fake values.
 
@@ -182,7 +185,7 @@ def load_mocap_data(seq_length):
     test_stds = np.concatenate(test_std_blocks, axis=0)
 
     return train_X, train_Y, train_means, train_stds, \
-           test_X,  test_Y,  test_means,  test_stds
+        test_X,  test_Y,  test_means,  test_stds
 
 
 def custom(thing):
@@ -300,8 +303,8 @@ def pck(y_true, y_pred, threshs, offsets):
         # Normalise by head-chin distance (or something)
         heads = np.linalg.norm(y_true[:, :, :, 0] - y_true[:, :, :, 1], axis=2)
         pck = (dists < heads.reshape((heads.shape[0], nt, 1)) * thresh) \
-              .mean(axis=2) \
-              .mean(axis=0)
+            .mean(axis=2) \
+            .mean(axis=0)
         for off_i, off in enumerate(offsets):
             label = 'pckh@%.2f/%d' % (thresh, off)
             rv[label] = pck[off_i]
@@ -375,7 +378,8 @@ class GaussianRamper(Callback):
             for layer in self.get_noise_layers():
                 layer.set_sigma(next_noise)
                 n += 1
-            print('Ramping Gaussian noise up to %g on %d layers' % (next_noise, n))
+            print('Ramping Gaussian noise up to %g on %d layers'
+                  % (next_noise, n))
 
     def on_epoch_end(self, epoch, logs):
         epoch_loss = logs[self.quantity]

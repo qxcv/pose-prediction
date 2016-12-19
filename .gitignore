@@ -12,3 +12,4 @@ keras/h36m-3d-poses/
 # Editor cruft
 *.swp
 *~
+.#*
