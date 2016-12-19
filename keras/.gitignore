@@ -2,3 +2,4 @@
 *.h5
 *.npy
 *.bak
+gan-out/

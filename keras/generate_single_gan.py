@@ -11,7 +11,7 @@ from keras.utils.generic_utils import Progbar
 import numpy as np
 import re
 from glob import glob
-from os import path
+from os import path, mkdir
 from scipy.io import savemat
 
 from common import CUSTOM_OBJECTS, GOOD_MOCAP_INDS, insert_junk_entries
@@ -143,7 +143,15 @@ def train_model(train_X, val_X, mu, sigma):
     total_X, out_shape = train_X.shape
     trainer = GANTrainer(train_X.shape[1])
     epochs = 0
+
+    # GAN predictions will be put in here
+    try:
+        mkdir('gan-out')
+    except FileExistsError:
+        pass
+
     print('Training generator')
+
     while True:
         copy_X = train_X.copy()
         np.random.shuffle(copy_X)
@@ -181,7 +189,7 @@ def train_model(train_X, val_X, mu, sigma):
         print('Saving predictions')
         poses = trainer.generate_poses(256) * sigma + mean
         poses = insert_junk_entries(poses)
-        savemat('gan-preds-epoch-%d.mat' % epochs, {'poses': poses})
+        savemat('gan-out/gan-preds-epoch-%d.mat' % epochs, {'poses': poses})
 
 
 def prepare_data_file(filename):
