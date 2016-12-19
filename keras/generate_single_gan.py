@@ -32,9 +32,9 @@ def make_generator(pose_size):
     model.add(Dense(256, input_dim=NOISE_DIM))
     model.add(Activation('relu'))
     model.add(BatchNormalization())
-    # model.add(Dense(1000))
-    # model.add(Activation('relu'))
-    # model.add(BatchNormalization())
+    model.add(Dense(1000))
+    model.add(Activation('relu'))
+    model.add(BatchNormalization())
     model.add(Dense(1000))
     model.add(Activation('relu'))
     model.add(BatchNormalization())
@@ -53,14 +53,15 @@ def make_discriminator(pose_size):
     # causing BatchNormalization to fail when you put it in a model which is
     # embedded downstream of something else.
     model = Sequential()
-    model.add(GaussianNoise(0.01, input_shape=(pose_size,)))
-    # model.add(Dense(64, input_dim=pose_size))
-    model.add(Dense(64))
+    model.add(GaussianNoise(0.1, input_shape=(pose_size,)))
+    model.add(Dense(128))
     model.add(Activation('relu'))
-    # model.add(BatchNormalization())
-    model.add(Dense(64))
+    model.add(Dropout(0.5))
+    model.add(Dense(128))
     model.add(Activation('relu'))
-    # model.add(BatchNormalization())
+    model.add(Dropout(0.5))
+    model.add(Dense(128))
+    model.add(Activation('relu'))
     model.add(Dropout(0.5))
     model.add(Dense(1))
     model.add(Activation('sigmoid'))
@@ -253,21 +254,3 @@ if __name__ == '__main__':
         print('Load failed, building model anew')
     if model is None:
         model = train_model(train_X, val_X, mean, std)
-
-    # TODO: Eval this. Will need to sample a bunch of poses , find the nearest
-    # pose in the training set (L2), then write the poses out to a .txt file
-    # (or preferably .mat file).
-    # print('Computing l2 losses from sampled poses')
-    # pred_model = make_model_predict(model)
-    # print('{:>12} {:>12}'.format('+t (ms)', 'l2 loss'))
-    # for offset, mean_loss in get_offset_losses(pred_model, val_X, val_Y,
-    #                                            val_means, val_stds):
-    #     # the *20 assumes frames are sampled at 50fps (so 1000/50ms per
-    #     # frame)
-    #     print('{:>12} {:>12}'.format(offset * 20, mean_loss))
-
-    # print('Scraping predictions for visualisation')
-    # results = scrape_sequences(pred_model, val_X, val_means, val_stds, 1,
-    #                            SEQ_LENGTH)
-    # to_write = insert_junk_entries(results[0])
-    # np.savetxt('prediction_erd.txt', to_write, delimiter=',')
