@@ -5,8 +5,8 @@ also be able to turn it into an InfoGAN :)"""
 
 from keras.models import Sequential, load_model
 from keras.layers import Dense, BatchNormalization, Activation, Dropout, \
-    GaussianNoise
-from keras.optimizers import SGD
+    GaussianNoise, LeakyReLU
+from keras.optimizers import Adam
 from keras.utils.generic_utils import Progbar
 import numpy as np
 import re
@@ -30,18 +30,19 @@ K = 5
 def make_generator(pose_size):
     model = Sequential()
     model.add(Dense(256, input_dim=NOISE_DIM))
-    model.add(Activation('relu'))
+    model.add(LeakyReLU(0.2))
     model.add(BatchNormalization())
     model.add(Dense(1000))
-    model.add(Activation('relu'))
+    model.add(LeakyReLU(0.2))
     model.add(BatchNormalization())
     model.add(Dense(1000))
-    model.add(Activation('relu'))
+    model.add(LeakyReLU(0.2))
     model.add(BatchNormalization())
     model.add(Dense(1000))
-    model.add(Activation('relu'))
+    model.add(LeakyReLU(0.2))
     model.add(BatchNormalization())
     model.add(Dense(pose_size))
+    model.add(Activation('tanh'))
 
     return model
 
@@ -53,16 +54,19 @@ def make_discriminator(pose_size):
     # causing BatchNormalization to fail when you put it in a model which is
     # embedded downstream of something else.
     model = Sequential()
-    model.add(GaussianNoise(0.1, input_shape=(pose_size,)))
+    # model.add(GaussianNoise(0.01, input_shape=(pose_size,)))
+    model.add(Dense(128, input_shape=(pose_size,)))
+    model.add(LeakyReLU(0.2))
+    # model.add(Dropout(0.5))
+    model.add(BatchNormalization())
     model.add(Dense(128))
-    model.add(Activation('relu'))
-    model.add(Dropout(0.5))
+    model.add(LeakyReLU(0.2))
+    # model.add(Dropout(0.5))
+    model.add(BatchNormalization())
     model.add(Dense(128))
-    model.add(Activation('relu'))
-    model.add(Dropout(0.5))
-    model.add(Dense(128))
-    model.add(Activation('relu'))
-    model.add(Dropout(0.5))
+    model.add(LeakyReLU(0.2))
+    # model.add(Dropout(0.5))
+    model.add(BatchNormalization())
     model.add(Dense(1))
     model.add(Activation('sigmoid'))
 
@@ -72,10 +76,14 @@ def make_discriminator(pose_size):
 class GANTrainer:
     noise_dim = NOISE_DIM
 
-    def __init__(self, pose_size, d_lr=0.0002, g_lr=0.0002):
+    def __init__(self, pose_size, d_lr=0.0002, g_lr=0.0002, adam_b1=0.5):
         # Compile individual models
+        # Opt parameters taken from DCGAN paper
         self.discriminator = make_discriminator(pose_size)
-        disc_opt = SGD(lr=d_lr, momentum=0.99, nesterov=True)
+        # Copy is read-only; it doesn't get compiled
+        self.discriminator_copy = make_discriminator(pose_size)
+        self.discriminator_copy.trainable = False
+        disc_opt = Adam(lr=d_lr, beta_1=adam_b1)
         self.discriminator.compile(disc_opt, 'binary_crossentropy',
                                    metrics=['binary_accuracy'])
 
@@ -86,13 +94,21 @@ class GANTrainer:
         # Nested model will be useful for training generator
         nested = Sequential()
         nested.add(self.generator)
-        # Apparently this works? IDK.
-        self.discriminator.trainable = False
-        nested.add(self.discriminator)
-        gen_opt = SGD(lr=g_lr, momentum=0.99, nesterov=True)
+        nested.add(self.discriminator_copy)
+        gen_opt = Adam(lr=g_lr, beta_1=adam_b1)
         nested.compile(gen_opt, 'binary_crossentropy',
                        metrics=['binary_accuracy'])
         self.nested_generator = nested
+
+    def update_disc_copy(self):
+        """Copy weights from real discriminator over to nested one. This skirts
+        a lot of Keras issues with nested, shared models."""
+        source = self.discriminator
+        dest = self.discriminator_copy
+
+        assert len(source.layers) == len(dest.layers)
+        for dest_layer, source_layer in zip(dest.layers, source.layers):
+            dest_layer.set_weights(source_layer.get_weights())
 
     def make_noise(self, num):
         """Input noise for generator"""
@@ -103,6 +119,7 @@ class GANTrainer:
         self.discriminator.trainable = False
         labels = [1] * batch_size
         noise = self.make_noise(batch_size)
+        self.update_disc_copy()
         return self.nested_generator.train_on_batch(noise, labels)
 
     def disc_train_step(self, true_batch):
@@ -129,6 +146,7 @@ class GANTrainer:
         break down accuracy a bit)."""
         noise = self.make_noise(num_poses)
         labels = [1] * num_poses
+        self.update_disc_copy()
         return self.nested_generator.evaluate(noise, labels,
                                               batch_size=batch_size)
 
