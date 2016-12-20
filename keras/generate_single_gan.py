@@ -4,14 +4,14 @@
 also be able to turn it into an InfoGAN :)"""
 
 from keras.models import Sequential, load_model
-from keras.layers import Dense, BatchNormalization, Activation, Dropout, \
-    GaussianNoise, LeakyReLU
-from keras.optimizers import Adam
+from keras.layers import Dense, BatchNormalization, Activation, GaussianNoise, \
+    LeakyReLU, Dropout
+from keras.optimizers import Adam, SGD
 from keras.utils.generic_utils import Progbar
 import numpy as np
 import re
 from glob import glob
-from os import path, mkdir
+from os import path, mkdir, makedirs
 from scipy.io import savemat
 
 from common import CUSTOM_OBJECTS, GOOD_MOCAP_INDS, insert_junk_entries
@@ -20,53 +20,44 @@ np.random.seed(2372143511)
 
 WEIGHTS_PATH = './best-single-gan-weights.h5'
 # Use NOISE_DIM-dimensional independent Gaussian noise
-NOISE_DIM = 20
+NOISE_DIM = 30
 BATCH_SIZE = 64
 # Discriminator train batches for each generator batch. Ideally, we keep the
 # discriminator a long way ahead of the generator.
-K = 5
+K = 10
 
 
 def make_generator(pose_size):
     model = Sequential()
-    model.add(Dense(256, input_dim=NOISE_DIM))
-    model.add(LeakyReLU(0.2))
+    model.add(Dense(500, input_dim=NOISE_DIM))
+    model.add(Activation('relu'))
     model.add(BatchNormalization())
-    model.add(Dense(1000))
-    model.add(LeakyReLU(0.2))
+    model.add(Dense(500))
+    model.add(Activation('relu'))
     model.add(BatchNormalization())
-    model.add(Dense(1000))
-    model.add(LeakyReLU(0.2))
+    model.add(Dense(500))
+    model.add(Activation('relu'))
     model.add(BatchNormalization())
-    model.add(Dense(1000))
-    model.add(LeakyReLU(0.2))
+    model.add(Dense(500))
+    model.add(Activation('relu'))
     model.add(BatchNormalization())
     model.add(Dense(pose_size))
-    model.add(Activation('tanh'))
+    # model.add(Activation('tanh'))
 
     return model
 
 
 def make_discriminator(pose_size):
-    # Hopefully this much narrower network will not be able to overfit to ~2MM
-    # poses. That should, in turn, prevent the generator from overfitting.
-    # I'm using dropout instead of BatchNormalization because there's some bug
-    # causing BatchNormalization to fail when you put it in a model which is
-    # embedded downstream of something else.
     model = Sequential()
-    # model.add(GaussianNoise(0.01, input_shape=(pose_size,)))
     model.add(Dense(128, input_shape=(pose_size,)))
     model.add(LeakyReLU(0.2))
-    # model.add(Dropout(0.5))
-    model.add(BatchNormalization())
+    model.add(Dropout(0.5))
     model.add(Dense(128))
     model.add(LeakyReLU(0.2))
-    # model.add(Dropout(0.5))
-    model.add(BatchNormalization())
+    model.add(Dropout(0.5))
     model.add(Dense(128))
     model.add(LeakyReLU(0.2))
-    # model.add(Dropout(0.5))
-    model.add(BatchNormalization())
+    model.add(Dropout(0.5))
     model.add(Dense(1))
     model.add(Activation('sigmoid'))
 
@@ -84,21 +75,26 @@ class GANTrainer:
         self.discriminator_copy = make_discriminator(pose_size)
         self.discriminator_copy.trainable = False
         disc_opt = Adam(lr=d_lr, beta_1=adam_b1)
+        # disc_opt = SGD(lr=d_lr, momentum=0.99, nesterov=True)
         self.discriminator.compile(disc_opt, 'binary_crossentropy',
                                    metrics=['binary_accuracy'])
 
         self.generator = make_generator(pose_size)
-        # AFAIK this doesn't really matter
-        self.generator.compile('sgd', 'mae')
 
         # Nested model will be useful for training generator
         nested = Sequential()
         nested.add(self.generator)
         nested.add(self.discriminator_copy)
         gen_opt = Adam(lr=g_lr, beta_1=adam_b1)
+        # gen_opt = SGD(lr=g_lr, momentum=0.99, nesterov=True)
         nested.compile(gen_opt, 'binary_crossentropy',
                        metrics=['binary_accuracy'])
+        # AFAIK this doesn't really matter
+        # self.generator.compile('sgd', 'mae')
         self.nested_generator = nested
+
+        self.num_disc_steps = 0
+        self.num_gen_steps = 0
 
     def update_disc_copy(self):
         """Copy weights from real discriminator over to nested one. This skirts
@@ -120,7 +116,14 @@ class GANTrainer:
         labels = [1] * batch_size
         noise = self.make_noise(batch_size)
         self.update_disc_copy()
-        return self.nested_generator.train_on_batch(noise, labels)
+        self.num_gen_steps += 1
+        pre_weights = self.discriminator_copy.get_weights()
+        rv = self.nested_generator.train_on_batch(noise, labels)
+        post_weights = self.discriminator_copy.get_weights()
+        # The next assertion fails with batch norm. I don't know how to stop
+        # those layers from updating :(
+        assert all(np.all(a == b) for a, b in zip(pre_weights, post_weights))
+        return rv
 
     def disc_train_step(self, true_batch):
         """Get some true poses and train discriminator to distinguish them from
@@ -129,6 +132,7 @@ class GANTrainer:
         poses = self.generate_poses(len(true_batch))
         labels = np.array([1] * len(true_batch) + [0] * len(poses))
         data = np.concatenate([true_batch, poses])
+        self.num_disc_steps += 1
         # Get back loss
         return self.discriminator.train_on_batch(data, labels)
 
@@ -154,6 +158,19 @@ class GANTrainer:
         """Generate some fixed number of poses. Useful for both generator and
         discriminator training."""
         return self.generator.predict_on_batch(self.make_noise(num))
+
+    def save(self, dest_dir):
+        """Save generator and discriminator to some path"""
+        try:
+            makedirs(dest_dir)
+        except FileExistsError:
+            pass
+        suffix = '-%d-%d.h5' % (self.num_gen_steps, self.num_disc_steps)
+        gen_path = path.join(dest_dir, 'gen' + suffix)
+        disc_path = path.join(dest_dir, 'disc' + suffix)
+        self.discriminator.save(disc_path)
+        self.generator.save(gen_path)
+
 
 
 def train_model(train_X, val_X, mu, sigma):
@@ -205,9 +222,15 @@ def train_model(train_X, val_X, mu, sigma):
 
         # Also save some predictions so that we can monitor training
         print('Saving predictions')
-        poses = trainer.generate_poses(256) * sigma + mean
+        poses = trainer.generate_poses(64) * sigma + mean
         poses = insert_junk_entries(poses)
         savemat('gan-out/gan-preds-epoch-%d.mat' % epochs, {'poses': poses})
+
+        # Sometimes we save a model
+        if not (epochs - 1) % 5:
+            dest_dir = 'saved-single-gans/'
+            print('Saving model to %s' % dest_dir)
+            trainer.save(dest_dir)
 
 
 def prepare_data_file(filename):
@@ -272,11 +295,4 @@ if __name__ == '__main__':
     train_X, val_X, mean, std = load_data()
     print('Data loaded')
 
-    model = None
-    try:
-        print('Loading model')
-        model = load_model(WEIGHTS_PATH, CUSTOM_OBJECTS)
-    except OSError:
-        print('Load failed, building model anew')
-    if model is None:
-        model = train_model(train_X, val_X, mean, std)
+    model = train_model(train_X, val_X, mean, std)
