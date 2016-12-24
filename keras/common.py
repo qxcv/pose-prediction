@@ -31,9 +31,9 @@ PREDICT_OFFSETS = [4, 8, 12, 16, 20, 24, 28]
 
 
 def insert_junk_entries(data):
-    assert data.ndim == 2 and data.shape[1] == len(GOOD_MOCAP_INDS)
-    rv = np.zeros((data.shape[0], TRUE_NUM_ENTRIES))
-    rv[:, GOOD_MOCAP_INDS] = data
+    assert 3 >= data.ndim >= 2 and data.shape[-1] == len(GOOD_MOCAP_INDS)
+    rv = np.zeros(data.shape[:-1] + (TRUE_NUM_ENTRIES,))
+    rv[..., GOOD_MOCAP_INDS] = data
     return rv
 
 
