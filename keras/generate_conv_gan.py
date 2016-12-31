@@ -13,6 +13,7 @@ import re
 from glob import glob
 from os import path, mkdir, makedirs
 from scipy.io import savemat
+from multiprocessing.pool import Pool
 
 from common import GOOD_MOCAP_INDS, insert_junk_entries
 
@@ -23,11 +24,11 @@ SEQ_LENGTH = 32
 SEQ_NOISE_PAD = 7
 NOISE_DIM = 30
 BATCH_SIZE = 16
-K = 5
+K = 2
 
 
 def make_generator(pose_size):
-    x = in_layer = Input(shape=(SEQ_LENGTH, NOISE_DIM))
+    x = in_layer = Input(shape=(SEQ_LENGTH + 2 * SEQ_NOISE_PAD, NOISE_DIM))
     x = Convolution1D(500, 3, border_mode='valid')(x)
     x = Activation('relu')(x)
     x = BatchNormalization()(x)
@@ -57,11 +58,19 @@ def make_discriminator(pose_size):
     in_shape = (SEQ_LENGTH, pose_size)
 
     x = in_layer = Input(shape=in_shape)
+    x = Convolution1D(128, 7, border_mode='valid')(x)
+    x = LeakyReLU(0.2)(x)
+    x = BatchNormalization()(x)
+    x = Convolution1D(128, 7, border_mode='valid')(x)
+    x = LeakyReLU(0.2)(x)
+    x = BatchNormalization()(x)
+    x = Convolution1D(128, 7, border_mode='valid')(x)
+    x = LeakyReLU(0.2)(x)
+    x = BatchNormalization()(x)
     x = Convolution1D(128, 8, border_mode='valid')(x)
     x = LeakyReLU(0.2)(x)
-    x = Convolution1D(128, 8, border_mode='valid')(x)
-    x = LeakyReLU(0.2)(x)
-    x = Convolution1D(1, 8, border_mode='valid')(x)
+    x = BatchNormalization()(x)
+    x = Convolution1D(1, 7, border_mode='valid')(x)
     x = Flatten()(x)
     out_layer = Activation('sigmoid')(x)
 
@@ -122,9 +131,10 @@ class GANTrainer:
         self.num_gen_steps += 1
         pre_weights = self.discriminator_copy.get_weights()
         rv = self.nested_generator.train_on_batch(noise, labels)
+        self.update_disc_copy()
         post_weights = self.discriminator_copy.get_weights()
-        # The next assertion fails with batch norm. I don't know how to stop
-        # those layers from updating :(
+        # The next assertion fails with batch norm when I don't copy. I don't
+        # know how to stop those layers from updating :(
         assert all(np.all(a == b) for a, b in zip(pre_weights, post_weights))
         return rv
 
@@ -261,26 +271,33 @@ def is_valid(data):
     return np.isfinite(data).all()
 
 
+_fnre = re.compile(r'^expmap_S(?P<subject>\d+)_(?P<action>.+).txt.gz$')
+
+
+def mapper(filename):
+    base = path.basename(filename)
+    meta = _fnre.match(base).groupdict()
+    subj_id = int(meta['subject'])
+
+    X = prepare_file(filename)
+
+    return (subj_id, X)
+
+
 def load_data():
-    fnre = re.compile(r'^expmap_S(?P<subject>\d+)_(?P<action>.+).txt.gz$')
 
     filenames = glob('h36m-3d-poses/expmap_*.txt.gz')
 
     train_X_blocks = []
     test_X_blocks = []
 
-    for filename in filenames:
-        base = path.basename(filename)
-        meta = fnre.match(base).groupdict()
-        subj_id = int(meta['subject'])
-
-        X = prepare_file(filename)
-
-        if subj_id == 5:
-            # subject 5 is for testing
-            test_X_blocks.append(X)
-        else:
-            train_X_blocks.append(X)
+    with Pool() as pool:
+        for subj_id, X in pool.map(mapper, filenames):
+            if subj_id == 5:
+                # subject 5 is for testing
+                test_X_blocks.append(X)
+            else:
+                train_X_blocks.append(X)
 
     train_X = np.concatenate(train_X_blocks, axis=0)
     test_X = np.concatenate(test_X_blocks, axis=0)

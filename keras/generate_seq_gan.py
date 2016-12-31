@@ -4,7 +4,7 @@ ERD."""
 
 from keras.models import Model, Sequential
 from keras.layers import Dense, Activation, TimeDistributed, LSTM, \
-    RepeatVector, Input, Dropout, LeakyReLU
+    RepeatVector, Input, Dropout, LeakyReLU, Bidirectional
 from keras.optimizers import Adam, RMSprop
 from keras.utils.generic_utils import Progbar
 import numpy as np
@@ -21,7 +21,10 @@ WEIGHTS_PATH = './best-seq-gan-weights.h5'
 SEQ_LENGTH = 32
 NOISE_DIM = 30
 BATCH_SIZE = 16
-K = 2
+# Factor by which to temporally downsample motion sequences. Makes motion
+# "slower", from network PoV.
+SEQ_SKIP = 3
+K = 5
 
 
 def make_generator(pose_size):
@@ -29,10 +32,8 @@ def make_generator(pose_size):
     x = TimeDistributed(Dense(500))(x)
     x = Activation('relu')(x)
     x = TimeDistributed(Dense(500))(x)
-    # Repeat processed noise over entire sequence
-    # x = RepeatVector(SEQ_LENGTH)(x)
-    x = LSTM(1000, return_sequences=True)(x)
-    x = LSTM(1000, return_sequences=True)(x)
+    x = Bidirectional(LSTM(1000, return_sequences=True))(x)
+    x = Bidirectional(LSTM(1000, return_sequences=True))(x)
     x = TimeDistributed(Dense(500))(x)
     x = Activation('relu')(x)
     # XXX: Why is there a 100 unit layer here? Is it actually from the ERD
@@ -54,8 +55,8 @@ def make_discriminator(pose_size):
     x = LeakyReLU(0.2)(x)
     x = Dropout(0.5)(x)
     x = TimeDistributed(Dense(128))(x)
-    x = LSTM(500, return_sequences=True)(x)
-    x = LSTM(500)(x)
+    x = Bidirectional(LSTM(500, return_sequences=True))(x)
+    x = Bidirectional(LSTM(500))(x)
     x = Dense(128)(x)
     x = LeakyReLU(0.2)(x)
     x = Dropout(0.5)(x)
@@ -176,6 +177,12 @@ class GANTrainer:
         self.generator.save(gen_path)
 
 
+def random_subset(array, count):
+    """Choose a random set of 'count' rows."""
+    indices = np.random.permutation(len(array))[:count]
+    return array[indices]
+
+
 def train_model(train_X, val_X, mu, sigma):
     assert train_X.ndim == 3, train_X.shape
     total_X, time_steps, out_shape = train_X.shape
@@ -191,8 +198,8 @@ def train_model(train_X, val_X, mu, sigma):
     print('Training generator')
 
     while True:
-        copy_X = train_X.copy()
-        np.random.shuffle(copy_X)
+        # Only use a small subset of data in each batch (20K points)
+        copy_X = random_subset(train_X, 20000)
         total_X, _, _ = copy_X.shape
         to_fetch = BATCH_SIZE // 2
         epochs += 1
@@ -219,16 +226,30 @@ def train_model(train_X, val_X, mu, sigma):
         # End of an epoch, so let's validate models (doesn't work so great,
         # TBH)
         print('\nValidating')
-        disc_loss, disc_acc = trainer.disc_val(val_X, BATCH_SIZE)
+        # Again, use a small subset of 5K points
+        to_val = random_subset(val_X, 5000)
+        disc_loss, disc_acc = trainer.disc_val(to_val, BATCH_SIZE)
         gen_loss, gen_acc = trainer.gen_val(100, BATCH_SIZE)
         print('\nDisc loss/acc:   %g/%g' % (disc_loss, disc_acc))
         print('Gen loss/acc:    %g/%g' % (gen_loss, gen_acc))
 
         # Also save some predictions so that we can monitor training
         print('Saving predictions')
-        poses = trainer.generate_poses(16) * sigma + mean
-        poses = insert_junk_entries(poses)
-        savemat('gan-seq-out/gan-seq-preds-epoch-%d.mat' % epochs, {'poses': poses})
+        gen_poses = trainer.generate_poses(16) * sigma + mean
+        gen_poses = insert_junk_entries(gen_poses)
+
+        def sample_real(real, count=16, sigma=sigma, mean=mean):
+            indices = np.random.permutation(len(real))[:count]
+            real_poses = real[indices] * sigma + mean
+            return insert_junk_entries(real_poses)
+
+        sampled_train_poses = sample_real(copy_X)
+        sampled_val_poses = sample_real(to_val)
+        savemat('gan-seq-out/gan-seq-preds-epoch-%d.mat' % epochs, {
+            'gen_poses': gen_poses,
+            'train_poses': sampled_train_poses,
+            'val_poses': sampled_val_poses
+        })
 
         # Sometimes we save a model
         if not (epochs - 1) % 5:
@@ -246,11 +267,12 @@ def prepare_file(filename):
     poses = poses[:, GOOD_MOCAP_INDS]
 
     seqs = []
-    end = len(poses) - SEQ_LENGTH + 1
-    # TODO: May make sense to have a bigger overlap here
-    step = max(1, min(SEQ_LENGTH // 2, 50))
-    for start in range(0, end, step):
-        seqs.append(poses[start:start+SEQ_LENGTH])
+    true_length = SEQ_LENGTH * SEQ_SKIP
+    end = len(poses) - true_length + 1
+    # TODO: Might not want to overlap sequences so much. Then again, it may not
+    # matter given that I'm shuffling anyway
+    for start in range(end):
+        seqs.append(poses[start:start+true_length:SEQ_SKIP])
 
     return np.stack(seqs)
 
