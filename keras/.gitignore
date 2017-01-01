@@ -6,3 +6,4 @@
 *.tar.xz
 *.mat
 *.h5
+events.out.tfevents.*
