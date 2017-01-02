@@ -21,8 +21,8 @@ np.random.seed(2372143511)
 
 POSE_OUT_DIR = 'vae/poses'
 MODEL_DIR = 'vae/models'
-NOISE_DIM = 25
-BATCH_SIZE = 64
+NOISE_DIM = 10
+BATCH_SIZE = 512
 INIT_LR = 0.001
 POSES_TO_SAVE = 256
 
@@ -92,11 +92,13 @@ def make_vae(pose_size):
 
     vae = Model(input=[encoder_in], output=[decoder_out])
 
-    # Mean loss is \|mu\|_2^2, std loss is tr(sig) - log(det(sig))
+    # Mean loss is \|mu\|_2^2, std loss is tr(sig) - log(det(sig)). Remove
+    # NOISE_DIM so that loss settles out around zero, instead of around
+    # NOISE_DIM.
     # XXX: Should I be taking the mean or something with KL divergence?
     # Having a loss that scales linearly in the number of dimensions is
     # bizarre.
-    kl_loss = K.sum(K.square(mean) + std - log_std, axis=-1)
+    kl_loss = K.sum(K.square(mean) + std - log_std, axis=-1) - NOISE_DIM
 
     # I've split the loss into three functions. kl_div and likelihood are
     # intended as metrics, so that I can monitor individual loss quantities.
@@ -147,15 +149,15 @@ def train_model(train_X, val_X, mean, std):
     def sample_poses(epoch, logs={}):
         """Save some poses for comparison."""
         gen_poses = decoder.predict(np.random.randn(POSES_TO_SAVE, NOISE_DIM))
-        # gen_poses = gen_poses * std + mean
+        gen_poses = gen_poses * std + mean
         gen_poses = insert_junk_entries(gen_poses)
 
         train_inds = np.random.permutation(len(train_X))[:POSES_TO_SAVE]
-        train_poses = train_X[train_inds]
+        train_poses = train_X[train_inds] * std + mean
         train_poses = insert_junk_entries(train_poses)
 
         val_inds = np.random.permutation(len(val_X))[:POSES_TO_SAVE]
-        val_poses = val_X[val_inds]
+        val_poses = val_X[val_inds] * std + mean
         val_poses = insert_junk_entries(val_poses)
 
         out_path = path.join(POSE_OUT_DIR, 'preds-epoch-%d.mat' % (epoch + 1))
@@ -171,7 +173,7 @@ def train_model(train_X, val_X, mean, std):
     cb_list = [
         LambdaCallback(on_epoch_end=sample_poses),
         ModelCheckpoint(model_path),
-        ReduceLROnPlateau(patience=5)
+        ReduceLROnPlateau(patience=10)
     ]
     vae.fit(train_X, train_X, validation_data=(val_X, val_X),
             shuffle=True, batch_size=BATCH_SIZE, nb_epoch=1000,
@@ -228,8 +230,8 @@ def load_data():
     mean = train_X.mean(axis=0).reshape((1, -1))
     std = train_X.std(axis=0).reshape((1, -1))
 
-    # train_X = (train_X - mean) / std
-    # test_X = (test_X - mean) / std
+    train_X = (train_X - mean) / std
+    test_X = (test_X - mean) / std
 
     assert is_valid(train_X)
     assert is_valid(test_X)
