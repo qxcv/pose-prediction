@@ -4,8 +4,8 @@ ERD."""
 
 from keras.models import Model, Sequential
 from keras.layers import Dense, Activation, TimeDistributed, LSTM, \
-    RepeatVector, Input, Dropout, LeakyReLU, Bidirectional, BatchNormalization
-from keras.optimizers import Adam, RMSprop
+    Input, Dropout, LeakyReLU, Bidirectional, BatchNormalization
+from keras.optimizers import RMSprop
 from keras.utils.generic_utils import Progbar
 from keras.callbacks import TensorBoard
 import numpy as np
@@ -106,9 +106,11 @@ class GANTrainer:
         self.num_gen_steps = 0
 
         # XXX: Need to set validation_data correctly
-        # self.nested_tb = TensorBoard(path.join(LOG_DIR, 'nest-gen'), histogram_freq=1)
+        # self.nested_tb = TensorBoard(path.join(LOG_DIR, 'nest-gen'),
+        #                              histogram_freq=1)
         # self.nested_tb._set_model(self.nested_generator.model)
-        # self.disc_tb = TensorBoard(path.join(LOG_DIR, 'disc'), histogram_freq=1)
+        # self.disc_tb = TensorBoard(path.join(LOG_DIR, 'disc'),
+        #                            histogram_freq=1)
         # self.disc_tb._set_model(self.discriminator)
 
     _tb_epochs = 0
@@ -139,9 +141,9 @@ class GANTrainer:
         noise = self.make_noise(batch_size)
         self.update_disc_copy()
         self.num_gen_steps += 1
-        pre_weights = self.discriminator_copy.get_weights()
+        # pre_weights = self.discriminator_copy.get_weights()
         rv = self.nested_generator.train_on_batch(noise, labels)
-        post_weights = self.discriminator_copy.get_weights()
+        # post_weights = self.discriminator_copy.get_weights()
         # The next assertion fails with batch norm. I don't know how to stop
         # those layers from updating :(
         # assert all(np.all(a == b) for a, b in zip(pre_weights, post_weights))
@@ -237,8 +239,7 @@ def train_model(train_X, val_X, mu, sigma):
 
     while True:
         # Only use a small subset of data in each batch (20K points)
-        # copy_X = random_subset(train_X, 20000)
-        copy_X = random_subset(train_X, 200)
+        copy_X = random_subset(train_X, 20000)
         total_X, _, _ = copy_X.shape
         to_fetch = BATCH_SIZE // 2
         epochs += 1
