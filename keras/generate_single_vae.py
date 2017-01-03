@@ -136,7 +136,6 @@ def make_vae(pose_size):
 
 
 def train_model(train_X, val_X, mean, std):
-    # TODO: Incorporate standardisation (like original GAN file did)
     assert train_X.ndim == 2, train_X.ndim
     total_X, out_shape = train_X.shape
     vae, encoder, decoder = make_vae(train_X.shape[1])
@@ -175,11 +174,19 @@ def train_model(train_X, val_X, mean, std):
             'val_poses': val_poses
         })
 
+    def save_encoder_decoder(epoch, logs={}):
+        model_path = path.join(MODEL_DIR, 'epoch-{epoch:02d}'.format(epoch=epoch))
+        encoder_path = model_path + '-enc.h5'
+        decoder_path = model_path + '-dec.h5'
+        print('Saving encoder to %s' % encoder_path)
+        encoder.save(encoder_path)
+        print('Saving decoder to %s' % decoder_path)
+        decoder.save(decoder_path)
+
     print('Training VAE')
-    model_path = path.join(MODEL_DIR, 'weights-{epoch:02d}-{val_loss:.2f}.h5')
     cb_list = [
         LambdaCallback(on_epoch_end=sample_poses),
-        ModelCheckpoint(model_path),
+        LambdaCallback(on_epoch_end=save_encoder_decoder),
         ReduceLROnPlateau(patience=10)
     ]
     vae.fit(train_X, train_X, validation_data=(val_X, val_X),

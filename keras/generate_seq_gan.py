@@ -4,10 +4,9 @@ ERD."""
 
 from keras.models import Model, Sequential
 from keras.layers import Dense, Activation, TimeDistributed, LSTM, \
-    Input, Dropout, LeakyReLU, Bidirectional, BatchNormalization
+    Input, LeakyReLU, Bidirectional, BatchNormalization
 from keras.optimizers import RMSprop
 from keras.utils.generic_utils import Progbar
-from keras.callbacks import TensorBoard
 import numpy as np
 import re
 from glob import glob
@@ -87,7 +86,7 @@ class GANTrainer:
         # Copy is read-only; it doesn't get compiled
         self.discriminator_copy = make_discriminator(pose_size)
         self.discriminator_copy.trainable = False
-        disc_opt = RMSprop(lr=d_lr, clipnorm=25.0)
+        disc_opt = RMSprop(lr=d_lr, clipnorm=1.0)
         self.discriminator.compile(disc_opt, 'binary_crossentropy',
                                    metrics=['binary_accuracy'])
 
@@ -97,7 +96,7 @@ class GANTrainer:
         nested = Sequential()
         nested.add(self.generator)
         nested.add(self.discriminator_copy)
-        gen_opt = RMSprop(lr=g_lr, clipnorm=25.0)
+        gen_opt = RMSprop(lr=g_lr, clipnorm=1.0)
         nested.compile(gen_opt, 'binary_crossentropy',
                        metrics=['binary_accuracy'])
         self.nested_generator = nested
@@ -302,7 +301,7 @@ def train_model(train_X, val_X, mu, sigma):
         trainer.run_tb_callbacks()
 
 
-def prepare_file(filename):
+def prepare_file(filename, seq_length, seq_skip):
     poses = np.loadtxt(filename, delimiter=',')
     assert poses.ndim == 2 and poses.shape[1] == 99, poses.shape
 
@@ -311,12 +310,12 @@ def prepare_file(filename):
     poses = poses[:, GOOD_MOCAP_INDS]
 
     seqs = []
-    true_length = SEQ_LENGTH * SEQ_SKIP
+    true_length = seq_length * seq_skip
     end = len(poses) - true_length + 1
     # TODO: Might not want to overlap sequences so much. Then again, it may not
     # matter given that I'm shuffling anyway
     for start in range(end):
-        seqs.append(poses[start:start+true_length:SEQ_SKIP])
+        seqs.append(poses[start:start+true_length:seq_skip])
 
     return np.stack(seqs)
 
@@ -328,17 +327,18 @@ def is_valid(data):
 _fnre = re.compile(r'^expmap_S(?P<subject>\d+)_(?P<action>.+).txt.gz$')
 
 
-def _mapper(filename):
+def _mapper(arg):
     """Worker to load data in parallel"""
+    filename, seq_length, seq_skip = arg
     base = path.basename(filename)
     meta = _fnre.match(base).groupdict()
     subj_id = int(meta['subject'])
-    X = prepare_file(filename)
+    X = prepare_file(filename, seq_length, seq_skip)
 
     return subj_id, X
 
 
-def load_data():
+def load_data(seq_length=SEQ_LENGTH, seq_skip=SEQ_SKIP):
     filenames = glob('h36m-3d-poses/expmap_*.txt.gz')
 
     train_X_blocks = []
@@ -346,7 +346,8 @@ def load_data():
 
     print('Spawning pool')
     with Pool() as pool:
-        for subj_id, X in pool.map(_mapper, filenames):
+        fn_seq = ((fn, seq_length, seq_skip) for fn in filenames)
+        for subj_id, X in pool.map(_mapper, fn_seq):
             if subj_id == 5:
                 # subject 5 is for testing
                 test_X_blocks.append(X)
