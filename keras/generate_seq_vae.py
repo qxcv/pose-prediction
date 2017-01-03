@@ -25,7 +25,7 @@ LOG_DIR = path.join(WORK_DIR, 'logs')
 POSE_OUT_DIR = path.join(WORK_DIR, 'poses')
 # Planning to start with modest prediction lengths and then work up from there.
 SEQ_LENGTH = 8
-NOISE_DIM = 30
+NOISE_DIM = 50
 BATCH_SIZE = 16
 SEQ_SKIP = 3
 POSES_TO_SAVE = 32
@@ -168,8 +168,8 @@ def train_model(train_X, val_X, mean, std):
         LambdaCallback(on_epoch_end=save_encoder_decoder),
         ReduceLROnPlateau(patience=10)
     ]
-    # TODO: Should reverse input data (!!)
-    vae.fit(train_X, train_X, validation_data=(val_X, val_X),
+    # We reverse input data to make encoder LSTM's job easier
+    vae.fit(train_X[:, ::-1, :], train_X, validation_data=(val_X[:, ::-1, :], val_X),
             shuffle=True, batch_size=BATCH_SIZE, nb_epoch=1000,
             callbacks=cb_list)
 
