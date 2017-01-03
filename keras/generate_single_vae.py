@@ -4,7 +4,8 @@
 basis for a full-on sequence encoder/decoder."""
 
 from keras.models import Model
-from keras.layers import Dense, BatchNormalization, Activation, Input, Lambda
+from keras.layers import Dense, BatchNormalization, Activation, Input, Lambda, \
+    merge
 from keras.optimizers import RMSprop
 from keras.callbacks import LambdaCallback, ModelCheckpoint, ReduceLROnPlateau
 import keras.backend as K
@@ -22,25 +23,40 @@ np.random.seed(2372143511)
 POSE_OUT_DIR = 'vae/poses'
 MODEL_DIR = 'vae/models'
 NOISE_DIM = 10
-BATCH_SIZE = 512
+BATCH_SIZE = 256
 INIT_LR = 0.001
 POSES_TO_SAVE = 256
 
 
+def block(start):
+    x = Dense(128)(start)
+    x = Activation('relu')(x)
+    x = BatchNormalization()(x)
+    x = Dense(128)(x)
+    x = Activation('relu')(x)
+    x = BatchNormalization()(x)
+    x = Dense(128)(x)
+    x = Activation('relu')(x)
+    x = BatchNormalization()(x)
+    return merge([x, start], mode='sum')
+    # y = Dense(128)(start)
+    # y = Activation('relu')(y)
+    # y = BatchNormalization()(y)
+    # z = merge([x, y], mode='sum')
+    # return z
+
+
 def make_decoder(pose_size):
     x = in_layer = Input(shape=(NOISE_DIM,))
-    x = Dense(500, input_dim=NOISE_DIM)(x)
+    x = Dense(128, input_dim=NOISE_DIM)(x)
     x = Activation('relu')(x)
     x = BatchNormalization()(x)
-    x = Dense(500)(x)
-    x = Activation('relu')(x)
-    x = BatchNormalization()(x)
-    x = Dense(500)(x)
-    x = Activation('relu')(x)
-    x = BatchNormalization()(x)
-    x = Dense(500)(x)
-    x = Activation('relu')(x)
-    x = BatchNormalization()(x)
+    x = block(x)
+    x = block(x)
+    x = block(x)
+    x = block(x)
+    x = block(x)
+    x = block(x)
     x = out_layer = Dense(pose_size)(x)
 
     decoder = Model(input=[in_layer], output=[out_layer])
@@ -50,18 +66,15 @@ def make_decoder(pose_size):
 
 def make_encoder(pose_size):
     x = in_layer = Input(shape=(pose_size,))
-    x = Dense(500, input_shape=(pose_size,))(x)
+    x = Dense(128, input_shape=(pose_size,))(x)
     x = Activation('relu')(x)
     x = BatchNormalization()(x)
-    x = Dense(500)(x)
-    x = Activation('relu')(x)
-    x = BatchNormalization()(x)
-    x = Dense(500)(x)
-    x = Activation('relu')(x)
-    x = BatchNormalization()(x)
-    x = Dense(500)(x)
-    x = Activation('relu')(x)
-    x = BatchNormalization()(x)
+    x = block(x)
+    x = block(x)
+    x = block(x)
+    x = block(x)
+    x = block(x)
+    x = block(x)
     # Need to output both mean and (diagonal) standard deviation
     mean = Dense(NOISE_DIM)(x)
     log_std = Dense(NOISE_DIM)(x)
