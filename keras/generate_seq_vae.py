@@ -25,11 +25,11 @@ LOG_DIR = path.join(WORK_DIR, 'logs')
 POSE_OUT_DIR = path.join(WORK_DIR, 'poses')
 # Planning to start with modest prediction lengths and then work up from there.
 SEQ_LENGTH = 8
-NOISE_DIM = 50
-BATCH_SIZE = 16
+NOISE_DIM = 100
+BATCH_SIZE = 64
 SEQ_SKIP = 3
 POSES_TO_SAVE = 32
-INIT_LR = 0.001
+INIT_LR = 0.0001
 
 
 def make_decoder(pose_size):
@@ -42,7 +42,8 @@ def make_decoder(pose_size):
     x = Activation('relu')(x)
     x = Dense(128)(x)
     x = RepeatVector(SEQ_LENGTH)(x)
-    x = LSTM(128, return_sequences=True)(x)
+    x = LSTM(500, return_sequences=True)(x)
+    # x = LSTM(500, return_sequences=True)(x)
     x = TimeDistributed(Dense(128))(x)
     x = Activation('relu')(x)
     x = TimeDistributed(Dense(128))(x)
@@ -63,8 +64,9 @@ def make_encoder(pose_size):
     x = TimeDistributed(Dense(128))(x)
     x = Activation('relu')(x)
     x = TimeDistributed(Dense(128))(x)
-    x = LSTM(128, return_sequences=False)(x)
-    x = Dense(128)(x)
+    # x = LSTM(500, return_sequences=True)(x)
+    x = LSTM(500, return_sequences=False)(x)
+    x = Dense(500)(x)
     x = Activation('relu')(x)
     mean = Dense(NOISE_DIM)(x)
     log_std = Dense(NOISE_DIM)(x)
@@ -110,7 +112,7 @@ def make_vae(pose_size):
 
         return l2_loss + kl_loss
 
-    vae_opt = RMSprop(lr=INIT_LR)
+    vae_opt = RMSprop(lr=INIT_LR, clipnorm=1.0)
     vae.compile(vae_opt, loss=loss, metrics=[kl_div, likelihood])
 
     return vae, encoder, decoder
