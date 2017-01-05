@@ -13,16 +13,18 @@ import keras.backend as K
 import numpy as np
 from os import path, makedirs
 from scipy.io import savemat
+import json
 
 from common import insert_junk_entries
 from generate_seq_gan import load_data
 
 np.random.seed(2372143511)
 
-WORK_DIR = './seq-vae/'
+WORK_DIR = './seq-vae'
 MODEL_DIR = path.join(WORK_DIR, 'models')
 LOG_DIR = path.join(WORK_DIR, 'logs')
 POSE_OUT_DIR = path.join(WORK_DIR, 'poses')
+META_DIR = path.join(WORK_DIR, 'meta')
 # Planning to start with modest prediction lengths and then work up from there.
 SEQ_LENGTH = 8
 NOISE_DIM = 100
@@ -42,8 +44,8 @@ def make_decoder(pose_size):
     x = Activation('relu')(x)
     x = Dense(128)(x)
     x = RepeatVector(SEQ_LENGTH)(x)
-    x = LSTM(500, return_sequences=True)(x)
-    # x = LSTM(500, return_sequences=True)(x)
+    x = LSTM(1000, return_sequences=True)(x)
+    x = LSTM(1000, return_sequences=True)(x)
     x = TimeDistributed(Dense(128))(x)
     x = Activation('relu')(x)
     x = TimeDistributed(Dense(128))(x)
@@ -64,8 +66,8 @@ def make_encoder(pose_size):
     x = TimeDistributed(Dense(128))(x)
     x = Activation('relu')(x)
     x = TimeDistributed(Dense(128))(x)
-    # x = LSTM(500, return_sequences=True)(x)
-    x = LSTM(500, return_sequences=False)(x)
+    x = LSTM(1000, return_sequences=True)(x)
+    x = LSTM(1000, return_sequences=False)(x)
     x = Dense(500)(x)
     x = Activation('relu')(x)
     mean = Dense(NOISE_DIM)(x)
@@ -182,5 +184,18 @@ if __name__ == '__main__':
     print('Loading data')
     train_X, val_X, mean, std = load_data(SEQ_LENGTH, SEQ_SKIP)
     print('Data loaded')
+
+    std_mean_path = path.join(META_DIR, 'std_mean.json')
+    print('Saving mean/std to %s' % std_mean_path)
+    try:
+        makedirs(META_DIR)
+    except FileExistsError:
+        pass
+    with open(std_mean_path, 'w') as fp:
+        to_dump = {
+            'mean': mean.tolist(),
+            'std': std.tolist()
+        }
+        json.dump(to_dump, fp)
 
     model = train_model(train_X, val_X, mean, std)

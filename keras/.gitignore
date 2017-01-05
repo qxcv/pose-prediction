@@ -7,4 +7,5 @@
 *.mat
 *.h5
 *.zip
+*.json
 events.out.tfevents.*
