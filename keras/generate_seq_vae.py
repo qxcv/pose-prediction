@@ -139,10 +139,29 @@ def make_vae(pose_size, args):
     return vae, encoder, decoder
 
 
-def train_model(train_X, val_X, mean, std, args):
-    assert train_X.ndim == 3, train_X.ndim
-    total_X, time_steps, out_shape = train_X.shape
+def train_model(train_data, val_data, mean, std, args):
+    assert train_data.ndim == 3, train_data.ndim
+    total_data, time_steps, out_shape = train_data.shape
     vae, encoder, decoder = make_vae(out_shape, args)
+
+    # We reverse input data to make encoder LSTM's job easier
+    train_in_end = args.seq_out_length - 1
+    train_X = train_data[:, train_in_end::-1]
+    train_out_start = train_data.shape[1] - args.seq_out_length
+    train_Y = train_data[:, train_out_start:]
+    del train_data
+
+    val_in_end = args.seq_out_length - 1
+    val_X = val_data[:, val_in_end::-1]
+    val_out_start = val_data.shape[1] - args.seq_out_length
+    val_Y = val_data[:, val_out_start:]
+    del val_data
+
+    # Make sure everything is the right shape
+    assert val_X.shape[1] == args.seq_in_length, val_X.shape
+    assert val_Y.shape[1] == args.seq_out_length, val_Y.shape
+    assert train_X.shape[1] == args.seq_in_length, train_X.shape
+    assert train_Y.shape[1] == args.seq_out_length, train_Y.shape
 
     try:
         makedirs(args.pose_dir)
@@ -154,6 +173,7 @@ def train_model(train_X, val_X, mean, std, args):
         pass
 
     def sample_trajectories(epoch, logs={}):
+        epoch += args.extra_epoch
         poses_to_save = args.poses_to_save
         gen_poses = decoder.predict(np.random.randn(poses_to_save, args.noise_dim))
         gen_poses = gen_poses * std + mean
@@ -184,6 +204,7 @@ def train_model(train_X, val_X, mean, std, args):
         return encoder_path, decoder_path
 
     def save_encoder_decoder(epoch, logs={}):
+        epoch += args.extra_epoch
         encoder_path, decoder_path = model_paths(epoch, logs)
         print('Saving encoder to %s' % encoder_path)
         encoder.save(encoder_path)
@@ -193,22 +214,69 @@ def train_model(train_X, val_X, mean, std, args):
     def save_state(epoch, logs={}):
         # Save all paths and arguments to file. Good for resumption of
         # training.
+        epoch += args.extra_epoch
         encoder_path, decoder_path = model_paths(epoch, logs)
         extra_args = sys.argv[1:]
         config_dest = args.config_path
         data = {
             'encoder_path': encoder_path,
             'decoder_path': decoder_path,
-            'args': extra_args
+            'args': extra_args,
+            'epoch': epoch + 1
         }
         print('Saving config to', config_dest)
         with open(config_dest, 'w') as fp:
             json.dump(data, fp, indent=2)
 
     def check_prediction_accuracy(epoch, logs={}):
-        # TODO: Record L2 distance at each time offset (esp. vs 'extend'
-        # baseline)
-        pass
+        # Check prediction accuracy over entire validation dataset
+        epoch += args.extra_epoch
+
+        print('Calculating prediction accuracies')
+
+        indices = np.random.permutation(len(val_X))[:1000]
+        sub_X = val_X[indices]
+        sub_Y = val_Y[indices]
+
+        # 'Extend' baseline. Recall that val_X is time-reversed, so this
+        # repeats the *last* pose in the input sequence (which may be in the
+        # middle of the true output sequence).
+        ext_preds = sub_X[:, :1]
+        ext_losses = np.mean(np.sum((sub_Y - ext_preds) ** 2, axis=2), axis=0)
+        del ext_preds
+
+        # VAE baseline.
+        K = 5
+        vae_losses = np.zeros((sub_Y.shape[0], sub_Y.shape[1], K))
+        for i in range(K):
+            vae_preds = vae.predict(sub_X)
+            vae_losses[:, :, i] = np.sum((sub_Y - vae_preds) ** 2, axis=2)
+        vae_mean_of_K = np.mean(np.mean(vae_losses, axis=2), axis=0)
+        vae_best_of_K = np.mean(np.min(vae_losses, axis=2), axis=0)
+
+        # Same as above, but we randomly shuffle inputs before doing
+        # prediction. This will tell us whether we're actually learning a sane
+        # embedding.
+        random_losses = np.zeros((sub_Y.shape[0], sub_Y.shape[1], K))
+        fake_X = sub_X[np.random.permutation(len(sub_X))]
+        for i in range(K):
+            random_preds = vae.predict(fake_X)
+            random_losses[:, :, i] = np.sum((sub_Y - random_preds) ** 2, axis=2)
+        random_mean_of_K = np.mean(np.mean(random_losses, axis=2), axis=0)
+        random_best_of_K = np.mean(np.min(random_losses, axis=2), axis=0)
+
+        dest_path = path.join(args.acc_dir, 'epoch-%d.npz' % epoch)
+        print('Saving accuracies to', dest_path)
+        kwargs = {
+            'vae_acc_mean_K': vae_mean_of_K,
+            'vae_acc_best_K': vae_best_of_K,
+            'random_acc_mean_K': random_mean_of_K,
+            'random_acc_best_K': random_best_of_K,
+            'ext_acc': ext_losses,
+            'epoch': epoch,
+            'K': K,
+        }
+        np.savez(dest_path, **kwargs)
 
     print('Training recurrent VAE')
     cb_list = [
@@ -218,8 +286,7 @@ def train_model(train_X, val_X, mean, std, args):
         LambdaCallback(on_epoch_end=check_prediction_accuracy),
         ReduceLROnPlateau(patience=10)
     ]
-    # We reverse input data to make encoder LSTM's job easier
-    vae.fit(train_X[:, ::-1, :], train_X, validation_data=(val_X[:, ::-1, :], val_X),
+    vae.fit(train_X, train_Y, validation_data=(val_X, val_Y),
             shuffle=True, batch_size=args.batch_size, nb_epoch=1000,
             callbacks=cb_list)
 
@@ -260,6 +327,7 @@ def add_extra_paths(args):
     args.log_dir = path.join(wd, 'logs')
     args.pose_dir = path.join(wd, 'poses')
     args.model_dir = path.join(wd, 'models')
+    args.acc_dir = path.join(wd, 'accs')
     args.config_path = path.join(wd, 'config.json')
 
 
@@ -280,8 +348,10 @@ def load_args():
         add_extra_paths(args)
         args.encoder_path = config['encoder_path']
         args.decoder_path = config['decoder_path']
+        args.extra_epoch = config['epoch']
     else:
         args.encoder_path = args.decoder_path = None
+        args.extra_epoch = 0
 
     return args
 
@@ -294,12 +364,16 @@ if __name__ == '__main__':
     train_X, val_X, mean, std = load_data(seq_length, args.seq_skip)
     print('Data loaded')
 
+    print('Making directories')
+    for dir_name in ['meta', 'log', 'pose', 'model', 'acc']:
+        to_make = getattr(args, dir_name + '_dir')
+        try:
+            makedirs(to_make)
+        except FileExistsError:
+            pass
+
     std_mean_path = path.join(args.meta_dir, 'std_mean.json')
     print('Saving mean/std to %s' % std_mean_path)
-    try:
-        makedirs(args.meta_dir)
-    except FileExistsError:
-        pass
     with open(std_mean_path, 'w') as fp:
         to_dump = {
             'mean': mean.tolist(),

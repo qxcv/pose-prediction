@@ -1,6 +1,7 @@
 *.pyc
 *.h5
 *.npy
+*.npz
 *.bak
 *.tar.gz
 *.tar.xz
