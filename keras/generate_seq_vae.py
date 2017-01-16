@@ -145,13 +145,13 @@ def train_model(train_data, val_data, mean, std, args):
     vae, encoder, decoder = make_vae(out_shape, args)
 
     # We reverse input data to make encoder LSTM's job easier
-    train_in_end = args.seq_out_length - 1
+    train_in_end = args.seq_in_length - 1
     train_X = train_data[:, train_in_end::-1]
     train_out_start = train_data.shape[1] - args.seq_out_length
     train_Y = train_data[:, train_out_start:]
     del train_data
 
-    val_in_end = args.seq_out_length - 1
+    val_in_end = args.seq_in_length - 1
     val_X = val_data[:, val_in_end::-1]
     val_out_start = val_data.shape[1] - args.seq_out_length
     val_Y = val_data[:, val_out_start:]
