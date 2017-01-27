@@ -13,6 +13,10 @@ classdef IkeaDB < handle
         is_val
         has_anno
         subj_ids
+        act_data
+        act_names
+        vid_clip_ids
+        internal_to_gopro_num
     end
     
     methods
@@ -30,10 +34,22 @@ classdef IkeaDB < handle
             vid_ids = unique([obj.data.video_id]);
             nclips = max(vid_ids);
             obj.poses = cell([1, nclips]);
+            obj.vid_clip_ids = zeros([1, nclips]);
             for i=vid_ids
                 fn = sprintf('pose_clip_%i.mat', i);
                 path = fullfile(obj.root, 'poses', fn);
                 obj.poses{i} = loadout(path, 'pose');
+            end
+            
+            obj.internal_to_gopro_num = nan([1 max(vid_ids)]);
+            for i=1:length(obj.data)
+                % This is for matching up with actions (which are mapped
+                % from video IDs), joining poses together, etc.
+                parts = strsplit(obj.data(i).clip_path, '/');
+                vid_id = sscanf(parts{end}, 'GOPR%d');
+                assert(0 < vid_id && vid_id < 200);
+                obj.vid_clip_ids(i) = vid_id;
+                obj.internal_to_gopro_num(obj.data(i).video_id) = vid_id;
             end
             
             % Subjects 9, 11 and 13 are for testing. The rest are for
@@ -53,6 +69,31 @@ classdef IkeaDB < handle
             end
             obj.is_test = obj.is_test & obj.has_anno;
             obj.is_val = ~(obj.is_train | obj.is_test);
+            
+            % Load action annotations.
+            obj.act_data = loadout(fullfile(root, 'activity_Ikea'), 'activity_Ikea');
+            obj.act_names = unique([obj.act_data.action_label]);
+            for i=1:length(obj.act_data)
+                action_name = obj.act_data(i).action_label;
+                action_id = find(strcmp(obj.act_names, action_name));
+                assert(length(action_id) == 1);
+                obj.act_data(i).action_id = action_id;
+            end
+        end
+        
+        function [starts, ends, actions] = seqactions(obj, video_id)
+            gopro_id = obj.internal_to_gopro_num(video_id);
+            vid_name = sprintf('IkeaDataset\\GOPR%04d.MP4', gopro_id);
+            all_names = [obj.act_data.video_path];
+            act_mask = strcmp(all_names, vid_name);
+            act_subset = obj.act_data(act_mask);
+            [~, sorted_inds] = sort([act_subset.start_index]);
+            act_subset = act_subset(sorted_inds);
+            
+            % 'starts', 'ends' and 'actions' will be integer vectors.
+            starts = [act_subset.start_index];
+            ends = [act_subset.end_index];
+            actions = [act_subset.action_id];
         end
         
         function info = seqinfo(obj, datum_id)
@@ -84,6 +125,14 @@ classdef IkeaDB < handle
             if obj.is_test(datum_id) && isempty(info.test_poses)
                 warning('pp:NoTestAnno', 'No true pose for datum %i', ...
                     datum_id);
+            end
+        end
+        
+        function video_poses(obj, video_num)
+            % Get all poses for a single video
+            match_name = sprintf('GOPR%04i', info.anno.video_id);
+            for i=1:length(obj.data)
+                dbi = obj.data(i);
             end
         end
         
