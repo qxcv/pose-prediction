@@ -9,6 +9,8 @@ else
 end
 
 dest_h5 = 'ikea_action_data.h5';
+% head & everything down is safe; other stuff is not
+good_joints = 1:8;
 
 % Save action names
 action_ids = db.act_names;
@@ -40,6 +42,8 @@ for tmp2_id=tmp2_ids
         continue
     end
     poses = db.poses{tmp2_id};
+    poses = poses(good_joints, :, :);
+    assert(length(db.PA) == size(poses, 1));
     action_vector = int16(zeros([1 length(poses)]));
     for act_i=1:length(starts)
         start = starts(act_i);
