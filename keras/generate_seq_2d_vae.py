@@ -1,49 +1,45 @@
 #!/usr/bin/env python3
-"""Generate a sequence of poses using a variational autoencoder. There's
-actually only one latent vector for the whole sequence; I don't expect this
-will work well, since noise usually needs to be of the same shape as real data
-(e.g. DCGAN paper recommends image-shaped noise)."""
+
+"""Try to predict only future pose in 2D. Will have to merge with
+generate_seq_act_vae.py."""
 
 from argparse import ArgumentParser
 import json
 from os import path, makedirs
 import sys
 
-from keras.models import Model, load_model
-from keras.layers import Dense, Activation, TimeDistributed, LSTM, \
-    Input, Lambda, RepeatVector, BatchNormalization
-from keras.optimizers import RMSprop
+from keras import backend as K
 from keras.callbacks import ReduceLROnPlateau, LambdaCallback
-import keras.backend as K
+from keras.layers import Dense, Activation, TimeDistributed, LSTM, \
+    Input, Lambda, RepeatVector
+from keras.models import Model, load_model
+from keras.optimizers import RMSprop
 
 import numpy as np
 
-from scipy.io import savemat
 
-from common import insert_junk_entries
-from generate_seq_gan import load_data
+import h5py
+
+
+VAL_FRAC = 0.2
+
 
 np.random.seed(2372143511)
 
 
 def make_decoder(pose_size, seq_length, noise_dim):
-    x = in_layer = Input(shape=(noise_dim,))
+    x = in_layer = Input(shape=(noise_dim,), name='dec_in')
     x = Dense(128)(x)
-    x = BatchNormalization(mode=1)(x)
     x = Activation('relu')(x)
     x = Dense(128)(x)
-    x = BatchNormalization(mode=1)(x)
     x = Activation('relu')(x)
     x = Dense(128)(x)
-    x = BatchNormalization(mode=1)(x)
     x = RepeatVector(seq_length)(x)
-    x = LSTM(1000, return_sequences=True, dropout_W=0.2, dropout_U=0.2)(x)
-    x = LSTM(1000, return_sequences=True, dropout_W=0.2, dropout_U=0.2)(x)
+    x = LSTM(1000, return_sequences=True)(x)
+    x = LSTM(1000, return_sequences=True)(x)
     x = TimeDistributed(Dense(128))(x)
-    x = TimeDistributed(BatchNormalization(mode=1))(x)
     x = Activation('relu')(x)
     x = TimeDistributed(Dense(128))(x)
-    x = TimeDistributed(BatchNormalization(mode=1))(x)
     x = Activation('relu')(x)
     x = out_layer = TimeDistributed(Dense(pose_size))(x)
 
@@ -53,26 +49,21 @@ def make_decoder(pose_size, seq_length, noise_dim):
 
 
 def make_encoder(pose_size, seq_length, noise_dim):
-    x = in_layer = Input(shape=(seq_length, pose_size,))
+    x = in_layer = Input(shape=(seq_length, pose_size,), name='enc_in')
     x = TimeDistributed(Dense(128))(x)
-    x = TimeDistributed(BatchNormalization(mode=1))(x)
     x = Activation('relu')(x)
     x = TimeDistributed(Dense(128))(x)
-    x = TimeDistributed(BatchNormalization(mode=1))(x)
     x = Activation('relu')(x)
     x = TimeDistributed(Dense(128))(x)
-    x = TimeDistributed(BatchNormalization(mode=1))(x)
     x = Activation('relu')(x)
     x = TimeDistributed(Dense(128))(x)
-    x = TimeDistributed(BatchNormalization(mode=1))(x)
-    x = LSTM(1000, return_sequences=True, dropout_W=0.2, dropout_U=0.2)(x)
-    x = LSTM(1000, return_sequences=False, dropout_W=0.2, dropout_U=0.2)(x)
+    x = LSTM(1000, return_sequences=True)(x)
+    x = LSTM(1000, return_sequences=False)(x)
     x = Dense(500)(x)
-    x = BatchNormalization(mode=1)(x)
     x = last_shared = Activation('relu')(x)
-    mean = Dense(noise_dim)(last_shared)
+    mean = Dense(noise_dim, name='enc_mean')(last_shared)
     var_in = Dense(noise_dim)(last_shared)
-    var = Activation('softplus')(var_in)
+    var = Activation('softplus', name='enc_var')(var_in)
 
     encoder = Model(input=[in_layer], output=[mean, var])
 
@@ -107,13 +98,13 @@ def make_vae(pose_size, args):
     # Sample from encoder's output distribution
     encoder_in = Input(shape=(seq_in_length, pose_size,))
     mean, var = encoder(encoder_in)
-    log_std = Lambda(lambda var: 0.5 * K.log(var))(var)
-    std = Lambda(lambda var: K.sqrt(var))(var)
+    log_std = Lambda(lambda var: 0.5 * K.log(var), output_shape=(noise_dim,), name='log_std')(var)
+    std = Lambda(lambda var: K.sqrt(var), output_shape=(noise_dim,), name='std')(var)
     def make_noise(layers):  # noqa
         mean, std = layers
         noise = K.random_normal(shape=K.shape(std), mean=0., std=1.)
         return noise * std + mean
-    latent = Lambda(make_noise)([mean, std])
+    latent = Lambda(make_noise, name='make_noise', output_shape=(noise_dim,))([mean, std])
 
     # Run latent variables through decoder
     decoder_out = decoder(latent)
@@ -125,18 +116,17 @@ def make_vae(pose_size, args):
         mean, std, log_std = l
         return K.sum(K.square(mean) + std - log_std, axis=1) - noise_dim
 
-    kl_loss = Lambda(kl_inner)([mean, std, log_std])
-
-    def kl_div(true, pred):
-        return K.mean(kl_loss)
+    kl_loss = Lambda(kl_inner, output_shape=(None,), name='kl_loss')([mean, std, log_std])
 
     def likelihood(true, pred):
         diff = true - pred
         return K.mean(K.sum(K.sum(K.square(diff), axis=-1), axis=-1))
 
-    def loss(x, x_hat):
-        # Log likelihood loss is just squared L2
-        diff = x - x_hat
+    def kl_div(true, pred):
+        return K.mean(kl_loss)
+
+    def loss(y_true, y_pred):
+        diff = y_true - y_pred
         l2_loss = K.sum(K.sum(K.square(diff), axis=-1), axis=-1)
 
         return l2_loss + kl_loss
@@ -147,29 +137,135 @@ def make_vae(pose_size, args):
     return vae, encoder, decoder
 
 
-def train_model(train_data, val_data, mean, std, args):
-    assert train_data.ndim == 3, train_data.ndim
-    total_data, time_steps, out_shape = train_data.shape
-    vae, encoder, decoder = make_vae(out_shape, args)
+def preprocess_sequence(poses, parents):
+    """Preprocess a sequence of 2D poses to have more tractable representation.
+    `parents` array is used to calculate output entries which are
+    parent-relative joint locations. Note that standardisation will have to be
+    performed later."""
+    # Poses should be T*(XY)*J
+    assert poses.ndim == 3, poses.shape
+    assert poses.shape[1] == 2, poses.shape
 
-    # We reverse input data to make encoder LSTM's job easier
-    train_in_end = args.seq_in_length - 1
-    train_X = train_data[:, train_in_end::-1]
-    train_out_start = train_data.shape[1] - args.seq_out_length
-    train_Y = train_data[:, train_out_start:]
-    del train_data
+    # Scale so that person roughly fits in 1x1 box at origin
+    scale = (np.max(poses, axis=2) - np.min(poses, axis=2)).flatten().std()
+    assert 1e-3 < scale < 1e4, scale
+    offset = np.mean(np.mean(poses, axis=2), axis=0).reshape((1, 2, 1))
+    norm_poses = (poses - offset) / scale
 
-    val_in_end = args.seq_in_length - 1
-    val_X = val_data[:, val_in_end::-1]
-    val_out_start = val_data.shape[1] - args.seq_out_length
-    val_Y = val_data[:, val_out_start:]
-    del val_data
+    # Compute actual data (relative offsets are easier to learn)
+    relpose = np.zeros_like(norm_poses)
+    relpose[0, 0, :] = 0
+    # Head position records delta from previous frame
+    relpose[1:, :, 0] = norm_poses[1:, :, 0] - norm_poses[:-1, :, 0]
+    # Other norm_poses record delta from parents
+    for jt in range(1, len(parents)):
+        pa = parents[jt]
+        relpose[:, :, jt] = norm_poses[:, :, jt] - norm_poses[:, :, pa]
 
+    # Collapse in last two dimensions, interleaving X and Y coordinates
+    shaped = relpose.reshape((relpose.shape[0], -1))
+
+    return shaped
+
+
+def reconstruct_poses(flat_poses, parents):
+    """Undo parent-relative joint transform. Will not undo the uniform scaling
+    applied to each sequence."""
+    # shape of poses shold be (num training samples)*(time)*(flattened
+    # dimensions)
+    assert flat_poses.ndim == 3, flat_poses.shape
+
+    # rel_poses is a 4D array: (num samples)*T*(XY)*J
+    rel_poses = flat_poses.reshape(flat_poses.shape[:2] + (2, -1))
+    true_poses = np.zeros_like(rel_poses)
+    N, T, Dxy, J = true_poses.shape
+    assert Dxy == 2
+    assert len(parents) == J
+
+    # start by restoring head from velocity param
+    rel_heads = rel_poses[:, :, :, 0]
+    true_heads = np.cumsum(rel_heads, axis=1)
+    true_poses[:, :, :, 0] = true_heads
+
+    # now reconstruct remaining joints from parents
+    for joint in range(1, len(parents)):
+        parent = parents[joint]
+        parent_pos = true_poses[:, :, :, parent]
+        offsets = rel_poses[:, :, :, joint]
+        true_poses[:, :, :, joint] = parent_pos + offsets
+
+    return true_poses
+
+
+def load_data(data_file, seq_in_length, seq_out_length, seq_skip):
+    total_seq_len = max(seq_in_length, seq_out_length)
+
+    train_X_blocks = []
+    val_X_blocks = []
+    train_Y_blocks = []
+    val_Y_blocks = []
+
+    with h5py.File(data_file, 'r') as fp:
+        parents = fp['/parents'].value
+
+        vid_names = list(fp['seqs'])
+        val_vid_list = list(vid_names)
+        np.random.shuffle(val_vid_list)
+        val_count = max(1, int(VAL_FRAC * len(val_vid_list)))
+        val_vids = set(val_vid_list[:val_count])
+
+        for vid_name in fp['seqs']:
+            poses = fp['/seqs/' + vid_name + '/poses'].value
+
+            assert poses.ndim == 3, poses.shape
+            assert len(parents) == poses.shape[2], poses.shape
+            assert 2 == poses.shape[1], poses.shape
+
+            relposes = preprocess_sequence(poses, parents)
+
+            for i in range(len(relposes) - seq_skip * total_seq_len + 1):
+                full_block = relposes[i:i+seq_skip*total_seq_len:seq_skip]
+                # Input is reversed
+                in_block = full_block[:seq_in_length][::-1]
+                out_block = full_block[len(full_block)-seq_out_length:]
+
+                assert in_block.ndim == 2 \
+                    and in_block.shape[0] == seq_in_length, in_block.shape
+                assert out_block.ndim == 2 \
+                    and out_block.shape[0] == seq_out_length, out_block.shape
+
+                if vid_name in val_vids:
+                    train_X_blocks.append(in_block)
+                    train_Y_blocks.append(out_block)
+                else:
+                    val_X_blocks.append(in_block)
+                    val_Y_blocks.append(out_block)
+
+    train_X = np.stack(train_X_blocks, axis=0)
+    train_Y = np.stack(train_Y_blocks, axis=0)
+    val_X = np.stack(val_X_blocks, axis=0)
+    val_Y = np.stack(val_Y_blocks, axis=0)
+
+    flat_X = train_X.reshape((-1, train_X.shape[-1]))
+    mean = flat_X.mean(axis=0).reshape((1, 1, -1))
+    std = flat_X.std(axis=0).reshape((1, 1, -1))
+    std[std < 1e-5] = 1
+    train_X = (train_X - mean) / std
+    val_X = (val_X - mean) / std
+
+    return train_X, train_Y, val_X, val_Y, mean, std, parents
+
+
+def train_model(train_X, train_Y, val_X, val_Y, mean, std, parents, args):
     # Make sure everything is the right shape
     assert val_X.shape[1] == args.seq_in_length, val_X.shape
     assert val_Y.shape[1] == args.seq_out_length, val_Y.shape
     assert train_X.shape[1] == args.seq_in_length, train_X.shape
     assert train_Y.shape[1] == args.seq_out_length, train_Y.shape
+
+    _, _, pose_shape = train_X.shape
+    assert train_Y.shape[2] == pose_shape
+    vae, encoder, decoder = make_vae(pose_shape, args)
 
     try:
         makedirs(args.pose_dir)
@@ -185,23 +281,20 @@ def train_model(train_data, val_data, mean, std, args):
         poses_to_save = args.poses_to_save
         gen_poses = decoder.predict(np.random.randn(poses_to_save, args.noise_dim))
         gen_poses = gen_poses * std + mean
-        gen_poses = insert_junk_entries(gen_poses)
+        gen_poses = reconstruct_poses(gen_poses, parents)
 
         train_inds = np.random.permutation(len(train_X))[:poses_to_save]
         train_poses = train_X[train_inds] * std + mean
-        train_poses = insert_junk_entries(train_poses)
+        train_poses = reconstruct_poses(train_poses, parents)
 
         val_inds = np.random.permutation(len(val_X))[:poses_to_save]
         val_poses = val_X[val_inds] * std + mean
-        val_poses = insert_junk_entries(val_poses)
+        val_poses = reconstruct_poses(val_poses, parents)
 
         out_path = path.join(args.pose_dir, 'preds-epoch-%d.mat' % (epoch + 1))
         print('\nSaving samples to', out_path)
-        savemat(out_path, {
-            'gen_poses': gen_poses,
-            'train_poses': train_poses,
-            'val_poses': val_poses
-        })
+        np.savez(out_path, poses_gen=gen_poses, poses_train=train_poses,
+                 poses_val=val_poses, parents=parents)
 
     def model_paths(epoch, logs={}):
         model_path = path.join(args.model_dir, 'epoch-{epoch:02d}'.format(
@@ -288,10 +381,10 @@ def train_model(train_data, val_data, mean, std, args):
     print('Training recurrent VAE')
     cb_list = [
         LambdaCallback(on_epoch_end=sample_trajectories),
+        LambdaCallback(on_epoch_end=check_prediction_accuracy),
         LambdaCallback(on_epoch_end=save_encoder_decoder),
         LambdaCallback(on_epoch_end=save_state),
-        LambdaCallback(on_epoch_end=check_prediction_accuracy),
-        ReduceLROnPlateau(patience=5)
+        ReduceLROnPlateau(patience=10)
     ]
     vae.fit(train_X, train_Y, validation_data=(val_X, val_Y),
             shuffle=True, batch_size=args.batch_size, nb_epoch=1000,
@@ -301,20 +394,16 @@ def train_model(train_data, val_data, mean, std, args):
 
 
 # TODO: Things which are probably beneficial to change over time:
-# - Sequence length (both input and output)
-# - Diversity of samples (in terms of # of distinct action classes). Need to
-#   clean data first, though.
 # - Coefficient on KL divergence term
-# - Learning rate (already changed via plateau thing)
 
 parser = ArgumentParser()
 parser.add_argument('--lr', type=float, dest='init_lr', default=0.0001,
                     help='initial learning rate')
-parser.add_argument('--work-dir', type=str, dest='work_dir', default='./seq-vae',
+parser.add_argument('--work-dir', type=str, dest='work_dir', default='./seq-2d-vae',
                     help='parent directory to store state')
-parser.add_argument('--seq-in-length', type=int, dest='seq_in_length', default=8,
+parser.add_argument('--seq-in-length', type=int, dest='seq_in_length', default=16,
                     help='length of input sequence')
-parser.add_argument('--seq-out-length', type=int, dest='seq_out_length', default=8,
+parser.add_argument('--seq-out-length', type=int, dest='seq_out_length', default=16,
                     help='length of sequence to predict (may overlap)')
 parser.add_argument('--save-poses', type=int, dest='poses_to_save', default=32,
                     help='number of sample poses to save at each epoch')
@@ -324,6 +413,8 @@ parser.add_argument('--batch-size', type=int, dest='batch_size', default=64,
                     help='size of training batch')
 parser.add_argument('--noise-dim', type=int, dest='noise_dim', default=64,
                     help='number of latent variables')
+parser.add_argument('--data-file', type=str, dest='data_file', default=None,
+                    help='HDF5 file containing poses')
 parser.add_argument('--no-resume', action='store_false', dest='resume', default=True,
                     help='stop automatic training resumption from checkpoint')
 
@@ -351,8 +442,8 @@ def load_args():
         extra_args = config['args']
         arg_list = extra_args + sys.argv[1:]
         args = parser.parse_args(arg_list)
-        args._all_args = arg_list
         add_extra_paths(args)
+        args._all_args = arg_list
         args.encoder_path = config['encoder_path']
         args.decoder_path = config['decoder_path']
         args.extra_epoch = config['epoch']
@@ -360,6 +451,7 @@ def load_args():
         args.encoder_path = args.decoder_path = None
         args.extra_epoch = 0
         args._all_args = sys.argv[1:]
+        assert args.data_file is not None, "Data file required if not resuming"
 
     return args
 
@@ -369,7 +461,8 @@ if __name__ == '__main__':
 
     print('Loading data')
     seq_length = max(args.seq_in_length, args.seq_out_length)
-    train_X, val_X, mean, std = load_data(seq_length, args.seq_skip, val_subj_5=False)
+    train_X, train_Y, val_X, val_Y, mean, std, parents \
+        = load_data(args.data_file, args.seq_in_length, args.seq_out_length, args.seq_skip)
     print('Data loaded')
 
     print('Making directories')
@@ -389,4 +482,4 @@ if __name__ == '__main__':
         }
         json.dump(to_dump, fp)
 
-    model = train_model(train_X, val_X, mean, std, args)
+    model = train_model(train_X, train_Y, val_X, val_Y, mean, std, parents, args)
