@@ -197,8 +197,8 @@ def load_data(data_file, seq_in_length, seq_out_length, seq_skip):
             assert len(relposes) == len(one_hot_acts)
 
             for i in range(len(relposes) - seq_skip * total_seq_len + 1):
-                in_block = relposes[i:i+seq_skip*seq_in_length:seq_skip]
-                out_block = one_hot_acts[i:i+seq_skip*seq_out_length:seq_skip][::-1]
+                in_block = relposes[i:i+seq_skip*seq_in_length:seq_skip][::-1]
+                out_block = one_hot_acts[i:i+seq_skip*seq_out_length:seq_skip]
 
                 assert in_block.ndim == 2 \
                     and in_block.shape[0] == seq_in_length, in_block.shape
@@ -291,7 +291,7 @@ def train_model(train_X, train_Y, val_X, val_Y, args):
         # training.
         epoch += args.extra_epoch
         encoder_path, decoder_path = model_paths(epoch, logs)
-        extra_args = sys.argv[1:]
+        extra_args = args._all_args
         config_dest = args.config_path
         data = {
             'encoder_path': encoder_path,
@@ -376,9 +376,9 @@ parser.add_argument('--lr', type=float, dest='init_lr', default=0.0001,
                     help='initial learning rate')
 parser.add_argument('--work-dir', type=str, dest='work_dir', default='./seq-act-vae',
                     help='parent directory to store state')
-parser.add_argument('--seq-in-length', type=int, dest='seq_in_length', default=8,
+parser.add_argument('--seq-in-length', type=int, dest='seq_in_length', default=16,
                     help='length of input sequence')
-parser.add_argument('--seq-out-length', type=int, dest='seq_out_length', default=8,
+parser.add_argument('--seq-out-length', type=int, dest='seq_out_length', default=16,
                     help='length of sequence to predict (may overlap)')
 # parser.add_argument('--save-poses', type=int, dest='poses_to_save', default=32,
 #                     help='number of sample poses to save at each epoch')
@@ -418,14 +418,15 @@ def load_args():
         extra_args = config['args']
         arg_list = extra_args + sys.argv[1:]
         args = parser.parse_args(arg_list)
+        args._all_args = arg_list
         add_extra_paths(args)
         args.encoder_path = config['encoder_path']
         args.decoder_path = config['decoder_path']
         args.extra_epoch = config['epoch']
-        args.data_file = config['data_file']
     else:
         args.encoder_path = args.decoder_path = None
         args.extra_epoch = 0
+        args._all_args = sys.argv[1:]
         assert args.data_file is not None, "Data file required if not resuming"
 
     return args

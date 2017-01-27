@@ -335,20 +335,32 @@ def _mapper(arg):
     subj_id = int(meta['subject'])
     X = prepare_file(filename, seq_length, seq_skip)
 
-    return subj_id, X
+    return subj_id, filename, X
 
 
-def load_data(seq_length=SEQ_LENGTH, seq_skip=SEQ_SKIP):
+def load_data(seq_length=SEQ_LENGTH, seq_skip=SEQ_SKIP, val_subj_5=True):
     filenames = glob('h36m-3d-poses/expmap_*.txt.gz')
 
     train_X_blocks = []
     test_X_blocks = []
 
+    if not val_subj_5:
+        # Need to make a pool of val_filenames
+        all_inds = np.random.permutation(len(filenames))
+        val_count = int(0.2*len(all_inds)+1)
+        val_inds = all_inds[:val_count]
+        fn_arr = np.array(filenames)
+        val_filenames = set(fn_arr[val_inds])
+
     print('Spawning pool')
     with Pool() as pool:
         fn_seq = ((fn, seq_length, seq_skip) for fn in filenames)
-        for subj_id, X in pool.map(_mapper, fn_seq):
-            if subj_id == 5:
+        for subj_id, filename, X in pool.map(_mapper, fn_seq):
+            if val_subj_5:
+                is_val = subj_id == 5
+            else:
+                is_val = filename in val_filenames
+            if is_val:
                 # subject 5 is for testing
                 test_X_blocks.append(X)
             else:
