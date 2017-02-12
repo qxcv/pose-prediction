@@ -8,6 +8,7 @@ from argparse import ArgumentParser
 import json
 from os import path, makedirs
 import sys
+from collections import namedtuple
 
 from keras import backend as K
 from keras.callbacks import ReduceLROnPlateau, LambdaCallback
@@ -17,7 +18,11 @@ from keras.models import Model, load_model
 from keras.objectives import categorical_crossentropy
 from keras.optimizers import RMSprop
 
+from sklearn.metrics import classification_report
+
 import numpy as np
+
+from scipy.stats import entropy
 
 import h5py
 
@@ -180,11 +185,18 @@ def load_data(data_file, seq_in_length, seq_out_length, seq_skip):
         parents = fp['/parents'].value
         num_actions = fp['/num_actions'].value.flatten()[0]
 
+        action_json_string = fp['/action_names'].value.tostring().decode('utf8')
+        # It's not really value JSON because it has a list at the root. Oh
+        # well.
+        action_names = ['n/a'] + json.loads(action_json_string)
+
         vid_names = list(fp['seqs'])
         val_vid_list = list(vid_names)
         np.random.shuffle(val_vid_list)
         val_count = max(1, int(VAL_FRAC * len(val_vid_list)))
         val_vids = set(val_vid_list[:val_count])
+
+        train_vids = set(val_vid_list) - val_vids
 
         for vid_name in fp['seqs']:
             actions = fp['/seqs/' + vid_name + '/actions'].value
@@ -224,22 +236,89 @@ def load_data(data_file, seq_in_length, seq_out_length, seq_skip):
     train_X = (train_X - mean) / std
     val_X = (val_X - mean) / std
 
-    return train_X, train_Y, val_X, val_Y, mean, std
+    Data = namedtuple('Data', ['train_X', 'train_Y', 'val_X', 'val_Y', 'mean',
+                               'std', 'action_names', 'train_vids', 'val_vids',
+                               'data_path'])
+
+    return Data(train_X, train_Y, val_X, val_Y, mean, std, action_names,
+                sorted(train_vids), sorted(val_vids), data_file)
 
 
-def train_model(train_X, train_Y, val_X, val_Y, args):
+def action_lists(probabilities, action_names):
+    assert probabilities.ndim == 3, probabilities.shape
+    samples, times, num_actions = probabilities.shape
+    assert len(action_names) == num_actions, \
+        (len(action_names), probabilities.shape)
+
+    entropies = []
+    actions = []
+
+    for seq in probabilities:
+        new_ents = []
+        new_acts = []
+
+        for step in seq:
+            ent = float(entropy(step))
+            new_ents.append(ent)
+
+            act = np.argmax(step)
+            act_name = action_names[act]
+            new_acts.append(act_name)
+
+        entropies.append(new_ents)
+        actions.append(new_acts)
+
+    return {
+        'entropies': entropies,
+        'probabilities': probabilities.tolist(),
+        'actions': actions
+    }
+
+
+def time_series_metrics(ground_truth, prediction_dict, action_names):
+    # Ground truth is assumed to be one-hot, as are entries in prediction_dict
+    # (maps baseline names to results)
+    assert ground_truth.ndim == 3, ground_truth.shape
+    gt_int = np.argmax(ground_truth, axis=2)
+    flat_gt_int = gt_int.flatten()
+
+    all_reports = []
+    accuracy_report = '## All accuracies (by timestep)\n'
+    for baseline_name, baseline_results in prediction_dict.items():
+        # Shape should be samples*times*actions
+        assert baseline_results.shape == ground_truth.shape, \
+            (baseline_results.shape, ground_truth.shape)
+        baseline_int = np.argmax(baseline_results, axis=2)
+        baseline_accs = np.mean(baseline_int == gt_int, axis=0)
+
+        format_bname = baseline_name.ljust(10)
+        acc_list = ','.join('% 7.3f' % acc for acc in baseline_accs)
+        accuracy_report += format_bname + acc_list + '\n'
+
+        flat_baseline_int = baseline_int.flatten()
+        class_report = classification_report(flat_gt_int, flat_baseline_int,
+                                             target_names=action_names)
+        full_report = ('## Stats for %s\n' % baseline_name) + class_report
+        all_reports.append(full_report)
+
+    all_reports.append(accuracy_report)
+
+    return '\n\n'.join(all_reports)
+
+
+def train_model(data, args):
     # Make sure everything is the right shape
-    assert val_X.shape[1] == args.seq_in_length, val_X.shape
-    assert val_Y.shape[1] == args.seq_out_length, val_Y.shape
-    assert train_X.shape[1] == args.seq_in_length, train_X.shape
-    assert train_Y.shape[1] == args.seq_out_length, train_Y.shape
+    assert data.val_X.shape[1] == args.seq_in_length, data.val_X.shape
+    assert data.val_Y.shape[1] == args.seq_out_length, data.val_Y.shape
+    assert data.train_X.shape[1] == args.seq_in_length, data.train_X.shape
+    assert data.train_Y.shape[1] == args.seq_out_length, data.train_Y.shape
 
-    _, _, in_shape = train_X.shape
-    _, _, out_shape = train_Y.shape
+    _, _, in_shape = data.train_X.shape
+    _, _, out_shape = data.train_Y.shape
     vae, encoder, decoder = make_vae(in_shape, out_shape, args)
 
     try:
-        makedirs(args.pose_dir)
+        makedirs(args.action_dir)
     except FileExistsError:
         pass
     try:
@@ -247,28 +326,28 @@ def train_model(train_X, train_Y, val_X, val_Y, args):
     except FileExistsError:
         pass
 
-    # def sample_trajectories(epoch, logs={}):
-    #     epoch += args.extra_epoch
-    #     poses_to_save = args.poses_to_save
-    #     gen_poses = decoder.predict(np.random.randn(poses_to_save, args.noise_dim))
-    #     gen_poses = gen_poses * std + mean
-    #     gen_poses = insert_junk_entries(gen_poses)
+    def sample_trajectories(epoch, logs={}):
+        epoch += args.extra_epoch
+        actions_to_save = args.actions_to_save
+        out_data = dict()
 
-    #     train_inds = np.random.permutation(len(train_X))[:poses_to_save]
-    #     train_poses = train_X[train_inds] * std + mean
-    #     train_poses = insert_junk_entries(train_poses)
+        gen_actions = decoder.predict(np.random.randn(actions_to_save, args.noise_dim))
+        out_data['gen_actions'] = action_lists(gen_actions, data.action_names)
 
-    #     val_inds = np.random.permutation(len(val_X))[:poses_to_save]
-    #     val_poses = val_X[val_inds] * std + mean
-    #     val_poses = insert_junk_entries(val_poses)
+        train_inds = np.random.permutation(len(data.train_X))[:actions_to_save]
+        train_actions = data.train_Y[train_inds]
+        out_data['train_actions'] = action_lists(train_actions, data.action_names)
 
-    #     out_path = path.join(args.pose_dir, 'preds-epoch-%d.mat' % (epoch + 1))
-    #     print('\nSaving samples to', out_path)
-    #     savemat(out_path, {
-    #         'gen_poses': gen_poses,
-    #         'train_poses': train_poses,
-    #         'val_poses': val_poses
-    #     })
+        val_inds = np.random.permutation(len(data.val_X))[:actions_to_save]
+        val_actions = data.val_Y[val_inds]
+        out_data['val_actions'] = action_lists(val_actions, data.action_names)
+
+        out_data['action_names'] = data.action_names
+
+        out_path = path.join(args.action_dir, 'preds-epoch-%d.json' % (epoch + 1))
+        print('\nSaving samples to', out_path)
+        with open(out_path, 'w') as fp:
+            json.dump(out_data, fp)
 
     def model_paths(epoch, logs={}):
         model_path = path.join(args.model_dir, 'epoch-{epoch:02d}'.format(
@@ -303,65 +382,46 @@ def train_model(train_X, train_Y, val_X, val_Y, args):
         with open(config_dest, 'w') as fp:
             json.dump(data, fp, indent=2)
 
-    # def check_prediction_accuracy(epoch, logs={}):
-    #     # Check prediction accuracy over entire validation dataset
-    #     epoch += args.extra_epoch
+    def check_prediction_accuracy(epoch, logs={}):
+        # Check prediction accuracy over entire validation dataset
+        epoch += args.extra_epoch
 
-    #     print('Calculating prediction accuracies')
+        print('Calculating prediction accuracies')
 
-    #     indices = np.random.permutation(len(val_X))[:1000]
-    #     sub_X = val_X[indices]
-    #     sub_Y = val_Y[indices]
+        indices = np.random.permutation(len(data.val_X))[:1000]
+        sub_X = data.val_X[indices]
+        sub_Y = data.val_Y[indices]
 
-    #     # 'Extend' baseline. Recall that val_X is time-reversed, so this
-    #     # repeats the *last* pose in the input sequence (which may be in the
-    #     # middle of the true output sequence).
-    #     ext_preds = sub_X[:, :1]
-    #     ext_losses = np.mean(np.sum((sub_Y - ext_preds) ** 2, axis=2), axis=0)
-    #     del ext_preds
+        # 'Extend' baseline. Repeats *last* action of input sequence.
+        ext_preds = np.repeat(sub_Y[:, args.seq_in_length-1:args.seq_in_length], args.seq_out_length, axis=1)
+        # Actual VAE baseline
+        vae_preds = vae.predict(sub_X)
+        # Fake VAE baseline in which the input has no bearing on the labels
+        # (input is randomly permuted). This should be much worse than the VAE
+        # baseline, in theory.
+        fake_X = sub_X[np.random.permutation(len(sub_X))]
+        random_preds = vae.predict(fake_X)
+        pred_dict = {
+            'extend': ext_preds,
+            'vae-pred': vae_preds,
+            'random-vae': random_preds
+        }
+        report = time_series_metrics(sub_Y, pred_dict, data.action_names)
 
-    #     # VAE baseline.
-    #     K = 5
-    #     vae_losses = np.zeros((sub_Y.shape[0], sub_Y.shape[1], K))
-    #     for i in range(K):
-    #         vae_preds = vae.predict(sub_X)
-    #         vae_losses[:, :, i] = np.sum((sub_Y - vae_preds) ** 2, axis=2)
-    #     vae_mean_of_K = np.mean(np.mean(vae_losses, axis=2), axis=0)
-    #     vae_best_of_K = np.mean(np.min(vae_losses, axis=2), axis=0)
-
-    #     # Same as above, but we randomly shuffle inputs before doing
-    #     # prediction. This will tell us whether we're actually learning a sane
-    #     # embedding.
-    #     random_losses = np.zeros((sub_Y.shape[0], sub_Y.shape[1], K))
-    #     fake_X = sub_X[np.random.permutation(len(sub_X))]
-    #     for i in range(K):
-    #         random_preds = vae.predict(fake_X)
-    #         random_losses[:, :, i] = np.sum((sub_Y - random_preds) ** 2, axis=2)
-    #     random_mean_of_K = np.mean(np.mean(random_losses, axis=2), axis=0)
-    #     random_best_of_K = np.mean(np.min(random_losses, axis=2), axis=0)
-
-    #     dest_path = path.join(args.acc_dir, 'epoch-%d.npz' % epoch)
-    #     print('Saving accuracies to', dest_path)
-    #     kwargs = {
-    #         'vae_acc_mean_K': vae_mean_of_K,
-    #         'vae_acc_best_K': vae_best_of_K,
-    #         'random_acc_mean_K': random_mean_of_K,
-    #         'random_acc_best_K': random_best_of_K,
-    #         'ext_acc': ext_losses,
-    #         'epoch': epoch,
-    #         'K': K,
-    #     }
-    #     np.savez(dest_path, **kwargs)
+        dest_path = path.join(args.acc_dir, 'epoch-%d.txt' % epoch)
+        print('Saving accuracy report to', dest_path)
+        with open(dest_path, 'w') as fp:
+            fp.write(report)
 
     print('Training recurrent VAE')
     cb_list = [
-        # LambdaCallback(on_epoch_end=sample_trajectories),
-        # LambdaCallback(on_epoch_end=check_prediction_accuracy),
+        LambdaCallback(on_epoch_end=sample_trajectories),
+        LambdaCallback(on_epoch_end=check_prediction_accuracy),
         LambdaCallback(on_epoch_end=save_encoder_decoder),
         LambdaCallback(on_epoch_end=save_state),
         ReduceLROnPlateau(patience=10)
     ]
-    vae.fit(train_X, train_Y, validation_data=(val_X, val_Y),
+    vae.fit(data.train_X, data.train_Y, validation_data=(data.val_X, data.val_Y),
             shuffle=True, batch_size=args.batch_size, nb_epoch=1000,
             callbacks=cb_list)
 
@@ -380,8 +440,8 @@ parser.add_argument('--seq-in-length', type=int, dest='seq_in_length', default=1
                     help='length of input sequence')
 parser.add_argument('--seq-out-length', type=int, dest='seq_out_length', default=16,
                     help='length of sequence to predict (may overlap)')
-# parser.add_argument('--save-poses', type=int, dest='poses_to_save', default=32,
-#                     help='number of sample poses to save at each epoch')
+parser.add_argument('--save-actions', type=int, dest='actions_to_save', default=32,
+                    help='number of sample action seqs to save at each epoch')
 parser.add_argument('--seq-skip', type=int, dest='seq_skip', default=3,
                     help='factor by which to temporally downsample data')
 parser.add_argument('--batch-size', type=int, dest='batch_size', default=64,
@@ -398,7 +458,7 @@ def add_extra_paths(args):
     wd = args.work_dir
     args.meta_dir = path.join(wd, 'meta')
     args.log_dir = path.join(wd, 'logs')
-    args.pose_dir = path.join(wd, 'poses')
+    args.action_dir = path.join(wd, 'actions')
     args.model_dir = path.join(wd, 'models')
     args.acc_dir = path.join(wd, 'accs')
     args.config_path = path.join(wd, 'config.json')
@@ -437,25 +497,28 @@ if __name__ == '__main__':
 
     print('Loading data')
     seq_length = max(args.seq_in_length, args.seq_out_length)
-    train_X, train_Y, val_X, val_Y, mean, std \
-        = load_data(args.data_file, args.seq_in_length, args.seq_out_length, args.seq_skip)
+    data = load_data(args.data_file, args.seq_in_length, args.seq_out_length, args.seq_skip)
     print('Data loaded')
 
     print('Making directories')
-    for dir_name in ['meta', 'log', 'pose', 'model', 'acc']:
+    for dir_name in ['meta', 'log', 'action', 'model', 'acc']:
         to_make = getattr(args, dir_name + '_dir')
         try:
             makedirs(to_make)
         except FileExistsError:
             pass
 
-    std_mean_path = path.join(args.meta_dir, 'std_mean.json')
-    print('Saving mean/std to %s' % std_mean_path)
+    std_mean_path = path.join(args.meta_dir, 'train-info.json')
+    print('Saving mean, std, action names, etc. to %s' % std_mean_path)
     with open(std_mean_path, 'w') as fp:
         to_dump = {
-            'mean': mean.tolist(),
-            'std': std.tolist()
+            'mean': data.mean.tolist(),
+            'std': data.std.tolist(),
+            'action_names': data.action_names,
+            'val_vids': data.val_vids,
+            'train_vids': data.train_vids,
+            'data_path': data.data_path
         }
         json.dump(to_dump, fp)
 
-    model = train_model(train_X, train_Y, val_X, val_Y, args)
+    model = train_model(data, args)

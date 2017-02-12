@@ -66,9 +66,7 @@ def take_samples(X, vae, mean, std, num_samples, num_alts, out_dir):
 
     for i in range(num_alts):
         print('Sampling alt %d/%d' % (i, num_alts))
-        preds = vae.predict(sub_X)
-        preds = preds * std + mean
-        preds = insert_junk_entries(preds)
+        preds = insert_junk_entries(vae.predict(sub_X) * std + mean)
         alt_preds.append(preds)
 
     print('Sampling done, writing data')
@@ -81,8 +79,8 @@ def take_samples(X, vae, mean, std, num_samples, num_alts, out_dir):
 
         # Write original
         orig_path = path.join(s_out_dir, 'orig.txt')
-        orig = sub_X[s]
-        np.savetxt(orig_path, orig, fmt='%f', delimiter=', ')
+        orig = insert_junk_entries(sub_X[s:s+1] * std + mean)[0]
+        np.savetxt(orig_path, orig, delimiter=',')
 
         # Write alternatives
         for a in range(num_alts):
@@ -92,7 +90,8 @@ def take_samples(X, vae, mean, std, num_samples, num_alts, out_dir):
 
 
 parser = ArgumentParser()
-parser.add_argument('--epoch', default=1, help='epoch number of saved model')
+parser.add_argument(
+    '--epoch', default=1, type=int, help='epoch number of saved model')
 parser.add_argument(
     '--model-dir',
     dest='model_dir',
@@ -108,13 +107,13 @@ parser.add_argument(
     '--num-train-samples',
     dest='num_train_samples',
     type=int,
-    default=100,
+    default=10,
     help='number of training sequences to sample')
 parser.add_argument(
     '--num-val-samples',
     dest='num_val_samples',
     type=int,
-    default=100,
+    default=10,
     help='number of valing sequences to sample')
 parser.add_argument(
     '--num-alts',

@@ -339,7 +339,10 @@ def _mapper(arg):
 
 
 def load_data(seq_length=SEQ_LENGTH, seq_skip=SEQ_SKIP, val_subj_5=True):
-    filenames = glob('h36m-3d-poses/expmap_*.txt.gz')
+    root = path.dirname(path.abspath(__file__))
+    filenames = glob(path.join(root, 'h36m-3d-poses', 'expmap_*.txt.gz'))
+    assert len(filenames) > 0, \
+        "Need some pose sequences to read! Check h36m-3d-poses at %s" % root
 
     train_X_blocks = []
     test_X_blocks = []
@@ -353,7 +356,8 @@ def load_data(seq_length=SEQ_LENGTH, seq_skip=SEQ_SKIP, val_subj_5=True):
         val_filenames = set(fn_arr[val_inds])
 
     print('Spawning pool')
-    with Pool() as pool:
+    pool = Pool()
+    try:
         fn_seq = ((fn, seq_length, seq_skip) for fn in filenames)
         for subj_id, filename, X in pool.map(_mapper, fn_seq):
             if val_subj_5:
@@ -365,6 +369,8 @@ def load_data(seq_length=SEQ_LENGTH, seq_skip=SEQ_SKIP, val_subj_5=True):
                 test_X_blocks.append(X)
             else:
                 train_X_blocks.append(X)
+    finally:
+        pool.terminate()
 
     # Memory usage is right on the edge of what small machines are capable of
     # handling here, so I'm being careful to delete large unneeded structures.

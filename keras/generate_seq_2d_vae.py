@@ -252,6 +252,10 @@ def load_data(data_file, seq_in_length, seq_out_length, seq_skip):
     std[std < 1e-5] = 1
     train_X = (train_X - mean) / std
     val_X = (val_X - mean) / std
+    train_Y = (train_Y - mean) / std
+    val_Y = (val_Y - mean) / std
+    assert (train_Y[:, :seq_in_length].flatten() == train_X[:, ::-1].flatten()).all()
+    assert (val_Y[:, :seq_in_length].flatten() == val_X[:, ::-1].flatten()).all()
 
     return train_X, train_Y, val_X, val_Y, mean, std, parents
 
@@ -338,10 +342,8 @@ def train_model(train_X, train_Y, val_X, val_Y, mean, std, parents, args):
         sub_X = val_X[indices]
         sub_Y = val_Y[indices]
 
-        # 'Extend' baseline. Recall that val_X is time-reversed, so this
-        # repeats the *last* pose in the input sequence (which may be in the
-        # middle of the true output sequence).
-        ext_preds = sub_X[:, :1]
+        # 'Extend' baseline
+        ext_preds = sub_Y[:, args.seq_in_length-1:args.seq_in_length]
         ext_losses = np.mean(np.sum((sub_Y - ext_preds) ** 2, axis=2), axis=0)
         del ext_preds
 
@@ -393,8 +395,9 @@ def train_model(train_X, train_Y, val_X, val_Y, mean, std, parents, args):
     return vae, encoder, decoder
 
 
-# TODO: Things which are probably beneficial to change over time:
-# - Coefficient on KL divergence term
+# TODO: Things which are probably beneficial:
+# - Changing coefficient on KL divergence term over time
+# - Adding action features (from Anoop's home dir)
 
 parser = ArgumentParser()
 parser.add_argument('--lr', type=float, dest='init_lr', default=0.0001,
