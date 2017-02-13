@@ -349,37 +349,43 @@ class VariableGaussianNoise(Layer):
         return dict(list(base_config.items()) + list(config.items()))
 
 
-class GaussianRamper(Callback):
-    """Ramps up magnitude of Gaussian noise as model converges."""
-    def __init__(self, patience, schedule, quantity='val_loss'):
-        self.sched_iter = iter(schedule)
+@custom
+class VariableScaler(Layer):
+    """Constant scaler with a variable coefficient."""
+    def __init__(self, scale, **kwargs):
+        self.scale = K.variable(scale)
+        super(VariableScaler, self).__init__(**kwargs)
+
+    def call(self, x, mask=None):
+        return x * self.scale
+
+    def get_scale(self):
+        return K.get_value(self.scale)
+
+    def set_scale(self, new_scale):
+        K.set_value(self.scale, new_scale)
+
+    def get_config(self):
+        config = {'scale': K.get_value(self.scale)}
+        base_config = super(VariableScaler, self).get_config()
+        return dict(list(base_config.items()) + list(config.items()))
+
+
+class PatienceCallback(Callback):
+    """Base class for things which wait for loss to plateau"""
+    def __init__(self, patience, quantity='val_loss'):
         self.waiting = 0
         self.best_loss = float('inf')
         self.quantity = quantity
-        self.update_sigma = True
+        self.should_update = True
         self.patience = patience
 
-    def get_noise_layers(self):
-        for layer in self.model.layers:
-            if isinstance(layer, VariableGaussianNoise):
-                yield layer
-
     def on_epoch_begin(self, epoch, logs={}):
-        """Do noise update at beginning of epoch instead of the end. This
+        """Do update at beginning of epoch instead of the end. This
         ensures that we always update during the first epoch."""
-        if self.update_sigma:
-            self.update_sigma = False
-            try:
-                next_noise = next(self.sched_iter)
-            except StopIteration:
-                print('Ramper out of patience, but schedule exhausted')
-                return
-            n = 0
-            for layer in self.get_noise_layers():
-                layer.set_sigma(next_noise)
-                n += 1
-            print('Ramping Gaussian noise up to %g on %d layers'
-                  % (next_noise, n))
+        if self.should_update:
+            self.do_update()
+            self.should_update = False
 
     def on_epoch_end(self, epoch, logs):
         epoch_loss = logs[self.quantity]
@@ -390,5 +396,58 @@ class GaussianRamper(Callback):
             self.best_loss = epoch_loss if improved else float('inf')
             self.waiting = 0
         if expired and not improved:
-            self.update_sigma = True
+            self.should_update = True
         self.waiting += 1
+
+
+class GaussianRamper(PatienceCallback):
+    """Ramps up magnitude of Gaussian noise as model converges."""
+    def __init__(self, patience, schedule, **kwargs):
+        self.sched_iter = iter(schedule)
+        super(GaussianRamper, self).__init__(patience, **kwargs)
+
+    def get_noise_layers(self):
+        for layer in self.model.layers:
+            if isinstance(layer, VariableGaussianNoise):
+                yield layer
+
+    def do_update(self):
+        try:
+            next_noise = next(self.sched_iter)
+        except StopIteration:
+            print('Gaussian ramper out of patience, but schedule exhausted')
+            return
+        n = 0
+        for layer in self.get_noise_layers():
+            layer.set_sigma(next_noise)
+            n += 1
+        print('Ramping Gaussian noise up to %g on %d layers'
+                % (next_noise, n))
+
+
+class ScaleRamper(PatienceCallback):
+    """Like GaussianRamper, but ramps up the scale of some layer. Currently
+    (Feb 2017) used to ramp up KL divergence on VAEs"""
+    def __init__(self, patience, schedule, target_name, **kwargs):
+        self.sched_iter = iter(schedule)
+        # may want to change to multiple target names later (hence set)
+        self.target_names = {target_name}
+        super(ScaleRamper, self).__init__(patience, **kwargs)
+
+    def get_target_layers(self):
+        for layer in self.model.layers:
+            if isinstance(layer, VariableScaler) \
+               and layer.name in self.target_names:
+                yield layer
+
+    def do_update(self):
+        try:
+            next_scale = next(self.sched_iter)
+        except StopIteration:
+            print('Scale ramper out of patience, but schedule exhausted')
+            return
+        n = 0
+        for layer in self.get_target_layers():
+            layer.set_scale(next_scale)
+            n += 1
+        print('Ramping scale noise up to %g on %d layers' % (next_scale, n))

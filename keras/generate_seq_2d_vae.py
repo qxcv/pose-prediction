@@ -7,6 +7,7 @@ from argparse import ArgumentParser
 import json
 from os import path, makedirs
 import sys
+from common import VariableScaler, ScaleRamper
 
 from keras import backend as K
 from keras.callbacks import ReduceLROnPlateau, LambdaCallback
@@ -109,28 +110,34 @@ def make_vae(pose_size, args):
     # Run latent variables through decoder
     decoder_out = decoder(latent)
 
-    vae = Model(input=[encoder_in], output=[decoder_out])
-
     def kl_inner(l):
         # Mean loss is \|mu\|_2^2, std loss is tr(sig) - log(det(sig))
         mean, std, log_std = l
         return K.sum(K.square(mean) + std - log_std, axis=1) - noise_dim
 
     kl_loss = Lambda(kl_inner, output_shape=(None,), name='kl_loss')([mean, std, log_std])
+    kl_loss_scale = VariableScaler(1.0, name='kl_scale')(kl_loss)
+    # XXX: This is a silly hack to make sure that kl_loss_scale actually
+    # appears in the layer list (thereby allowing the scale ramper to access
+    # it). Should figure out a more principled way of achieving what I want
+    # (changing the balance between several objectives over time).
+    decoder_out = Lambda(lambda a: a[0])([decoder_out, kl_loss_scale])
+
 
     def likelihood(true, pred):
         diff = true - pred
         return K.mean(K.sum(K.sum(K.square(diff), axis=-1), axis=-1))
 
     def kl_div(true, pred):
-        return K.mean(kl_loss)
+        return K.mean(kl_loss_scale)
 
     def loss(y_true, y_pred):
         diff = y_true - y_pred
         l2_loss = K.sum(K.sum(K.square(diff), axis=-1), axis=-1)
 
-        return l2_loss + kl_loss
+        return l2_loss + kl_loss_scale
 
+    vae = Model(input=[encoder_in], output=[decoder_out])
     vae_opt = RMSprop(lr=init_lr, clipnorm=1.0)
     vae.compile(vae_opt, loss=loss, metrics=[kl_div, likelihood])
 
@@ -386,7 +393,10 @@ def train_model(train_X, train_Y, val_X, val_Y, mean, std, parents, args):
         LambdaCallback(on_epoch_end=check_prediction_accuracy),
         LambdaCallback(on_epoch_end=save_encoder_decoder),
         LambdaCallback(on_epoch_end=save_state),
-        ReduceLROnPlateau(patience=10)
+        # patiences of 10 and 6 should ensure that changes are synchronised
+        ReduceLROnPlateau(patience=10),
+        ScaleRamper(patience=6, schedule=args.kl_schedule,
+                    target_name='kl_scale', quantity='val_loss')
     ]
     vae.fit(train_X, train_Y, validation_data=(val_X, val_Y),
             shuffle=True, batch_size=args.batch_size, nb_epoch=1000,
@@ -396,8 +406,16 @@ def train_model(train_X, train_Y, val_X, val_Y, mean, std, parents, args):
 
 
 # TODO: Things which are probably beneficial:
-# - Changing coefficient on KL divergence term over time
 # - Adding action features (from Anoop's home dir)
+
+def some_floats(str_in):
+    """Converts comma-seperated float list to Python float tuple"""
+    items = str_in.split(',')
+    stripped = map(str.strip, items)
+    nonempty = filter(bool, stripped)
+    floats = map(float, nonempty)
+    return tuple(floats)
+
 
 parser = ArgumentParser()
 parser.add_argument('--lr', type=float, dest='init_lr', default=0.0001,
@@ -418,6 +436,13 @@ parser.add_argument('--noise-dim', type=int, dest='noise_dim', default=64,
                     help='number of latent variables')
 parser.add_argument('--data-file', type=str, dest='data_file', default=None,
                     help='HDF5 file containing poses')
+# --feat-file is generally used to provide extra context for each frame in the
+# encoder. The aim is to help the model learn better latent featuers.
+# parser.add_argument('--feat-file', type=str, dest='feat_file', default=None,
+#                     help='HDF5 file containing auxiliary, per-frame features')
+parser.add_argument('--kl-schedule', dest='kl_schedule', type=some_floats,
+                    default=(1.0,),
+                    help='KL divergence coefficient (try ramping this up)')
 parser.add_argument('--no-resume', action='store_false', dest='resume', default=True,
                     help='stop automatic training resumption from checkpoint')
 
