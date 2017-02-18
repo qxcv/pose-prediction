@@ -22,12 +22,12 @@ classdef IkeaDB < handle
     methods
         function obj = IkeaDB(root)
             if nargin == 0
-                root = './';
+                root = './IkeaDataset';
             end
             obj.root = root;
             
             % Load clip database itself
-            obj.data = loadout(fullfile(root, 'IkeaClipsDB'), 'IkeaDB');
+            obj.data = loadout(fullfile(root, 'IkeaClipsDB_withactions.mat'), 'IkeaDB');
             
             % Load all poses; obj.poses will have some gaps (e.g. clip 27
             % is missing)
@@ -37,7 +37,7 @@ classdef IkeaDB < handle
             obj.vid_clip_ids = zeros([1, nclips]);
             for i=vid_ids
                 fn = sprintf('pose_clip_%i.mat', i);
-                path = fullfile(obj.root, 'poses', fn);
+                path = fullfile(obj.root, 'tmp2', fn);
                 obj.poses{i} = loadout(path, 'pose');
             end
             
@@ -71,7 +71,8 @@ classdef IkeaDB < handle
             obj.is_val = ~(obj.is_train | obj.is_test);
             
             % Load action annotations.
-            obj.act_data = loadout(fullfile(root, 'activity_Ikea'), 'activity_Ikea');
+            obj.act_data = loadout(fullfile(root, 'ActionAnnotations', ...
+                'activity_Ikea'), 'activity_Ikea');
             obj.act_names = unique([obj.act_data.action_label]);
             for i=1:length(obj.act_data)
                 action_name = obj.act_data(i).action_label;
