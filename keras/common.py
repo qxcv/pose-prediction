@@ -11,43 +11,29 @@ from glob import glob
 import re
 from os import path
 
+# here because I can't be bothered updating other code to point to h36m_loader
+from h36m_loader import GOOD_MOCAP_INDS, insert_junk_entries  # flake8: noqa
+
 PA = [0, 0, 1, 2, 3, 1, 5, 6]
 THRESHOLDS = [0.05, 0.15, 0.25, 0.5, 0.8]
 # Dictionary to pass to load_model, etc., to find custom objectives and layers
 CUSTOM_OBJECTS = {}
-# Indices of nonzero features in expmap mocap inds. I have no idea why the
-# zeroed features are ever written out.
-GOOD_MOCAP_INDS = [
-    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 13, 14, 15, 21, 22, 23, 24, 27, 28, 29,
-    30, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 51, 52, 53, 54, 55, 56,
-    57, 60, 61, 62, 75, 76, 77, 78, 79, 80, 81, 84, 85, 86
-]
-# Remainder of the 99 entries are constant zero (apparently)
-TRUE_NUM_ENTRIES = 99
 # Standard deviations for noise
 NOISE_SCHEDULE = [0.01, 0.05, 0.1, 0.2, 0.3, 0.5, 0.7]
 # Correspond to horizons of 80, 160, 240, 320, 400, 480, 560ms
 PREDICT_OFFSETS = [4, 8, 12, 16, 20, 24, 28]
 
 
-def insert_junk_entries(data):
-    assert 3 >= data.ndim >= 2 and data.shape[-1] == len(GOOD_MOCAP_INDS)
-    rv = np.zeros(data.shape[:-1] + (TRUE_NUM_ENTRIES,))
-    rv[..., GOOD_MOCAP_INDS] = data
-    return rv
-
-
 def scrape_sequences(model, data, data_mean, data_std, num_to_scrape,
                      seq_length):
-    sel_indices = np.random.choice(np.arange(data.shape[0]),
-                                   size=num_to_scrape,
-                                   replace=False)
+    sel_indices = np.random.choice(
+        np.arange(data.shape[0]), size=num_to_scrape, replace=False)
 
     assert data.ndim == 3
     assert data.shape[1] == seq_length - 1
 
     train_k = data.shape[1] // 2
-    all_preds = np.zeros((num_to_scrape,) + data.shape[1:])
+    all_preds = np.zeros((num_to_scrape, ) + data.shape[1:])
 
     for pi, ind in enumerate(sel_indices):
         seq = data[ind]
@@ -58,23 +44,26 @@ def scrape_sequences(model, data, data_mean, data_std, num_to_scrape,
             preds[i, :] = model.predict(seq[i].reshape((1, 1, -1)))
 
         for i in range(train_k, data.shape[1]):
-            preds[i, :] = model.predict(preds[i-1, :].reshape((1, 1, -1)))
+            preds[i, :] = model.predict(preds[i - 1, :].reshape((1, 1, -1)))
 
         all_preds[pi, :, :] = preds * data_std[ind] + data_mean[ind]
 
     return all_preds
 
 
-def get_offset_losses(model, test_X, test_Y, test_means, test_stds,
+def get_offset_losses(model,
+                      test_X,
+                      test_Y,
+                      test_means,
+                      test_stds,
                       to_sample=100):
     """Try to imitate ERD paper quant eval: compare true values of Y (after
     adding mean/std) with fake values.
 
     I really don't know what the ERD paper was actually using for quant eval,
     though, so this will probably be some way from the right result :/"""
-    sel_indices = np.random.choice(np.arange(test_X.shape[0]),
-                                   size=to_sample,
-                                   replace=False)
+    sel_indices = np.random.choice(
+        np.arange(test_X.shape[0]), size=to_sample, replace=False)
     # Use the first half of the sequence as a prefix
     train_k = test_X.shape[1] // 2
     losses = {}
@@ -88,7 +77,7 @@ def get_offset_losses(model, test_X, test_Y, test_means, test_stds,
             preds[i, :] = model.predict(seq[i].reshape((1, 1, -1)))
 
         for i in range(train_k, test_X.shape[1]):
-            preds[i, :] = model.predict(preds[i-1, :].reshape((1, 1, -1)))
+            preds[i, :] = model.predict(preds[i - 1, :].reshape((1, 1, -1)))
 
         mean, std = test_means[ind, 0], test_stds[ind, 0]
         for offset in PREDICT_OFFSETS:
@@ -116,7 +105,7 @@ def prepare_mocap_data(filename, seq_length):
     end = len(poses) - seq_length + 1
     step = min(seq_length, 50)
     for start in range(0, end, step):
-        seqs.append(poses[start:start+seq_length])
+        seqs.append(poses[start:start + seq_length])
 
     data = np.stack(seqs)
     X = data[:, :-1, :]
@@ -317,7 +306,7 @@ def huber_loss(y_true, y_pred):
     diff = y_true - y_pred
     diff_abs = K.abs(diff)
     error_abs = diff_abs - 0.5
-    error_sq = (diff ** 2) / 2.0
+    error_sq = (diff**2) / 2.0
     merged = K.switch(diff_abs <= 1.0, error_sq, error_abs)
     return K.mean(merged)
 
@@ -325,6 +314,7 @@ def huber_loss(y_true, y_pred):
 @custom
 class VariableGaussianNoise(Layer):
     """Variant of GaussianNoise that you can turn up or down."""
+
     def __init__(self, sigma, **kwargs):
         self.supports_masking = True
         self.sigma = K.variable(sigma)
@@ -332,9 +322,8 @@ class VariableGaussianNoise(Layer):
         super(VariableGaussianNoise, self).__init__(**kwargs)
 
     def call(self, x, mask=None):
-        noise_x = x + K.random_normal(shape=K.shape(x),
-                                      mean=0.,
-                                      std=self.sigma)
+        noise_x = x + K.random_normal(
+            shape=K.shape(x), mean=0., std=self.sigma)
         return K.in_train_phase(noise_x, x)
 
     def get_sigma(self):
@@ -352,6 +341,7 @@ class VariableGaussianNoise(Layer):
 @custom
 class VariableScaler(Layer):
     """Constant scaler with a variable coefficient."""
+
     def __init__(self, scale, **kwargs):
         self.scale = K.variable(scale)
         super(VariableScaler, self).__init__(**kwargs)
@@ -373,6 +363,7 @@ class VariableScaler(Layer):
 
 class PatienceCallback(Callback):
     """Base class for things which wait for loss to plateau"""
+
     def __init__(self, patience, quantity='val_loss'):
         self.waiting = 0
         self.best_loss = float('inf')
@@ -402,6 +393,7 @@ class PatienceCallback(Callback):
 
 class GaussianRamper(PatienceCallback):
     """Ramps up magnitude of Gaussian noise as model converges."""
+
     def __init__(self, patience, schedule, **kwargs):
         self.sched_iter = iter(schedule)
         super(GaussianRamper, self).__init__(patience, **kwargs)
@@ -421,13 +413,13 @@ class GaussianRamper(PatienceCallback):
         for layer in self.get_noise_layers():
             layer.set_sigma(next_noise)
             n += 1
-        print('Ramping Gaussian noise up to %g on %d layers'
-                % (next_noise, n))
+        print('Ramping Gaussian noise up to %g on %d layers' % (next_noise, n))
 
 
 class ScaleRamper(PatienceCallback):
     """Like GaussianRamper, but ramps up the scale of some layer. Currently
     (Feb 2017) used to ramp up KL divergence on VAEs"""
+
     def __init__(self, patience, schedule, target_name, **kwargs):
         self.sched_iter = iter(schedule)
         # may want to change to multiple target names later (hence set)
