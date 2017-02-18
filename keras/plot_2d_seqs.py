@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-
 """Tool for plotting sequences of generated 2D poses side-by-side."""
 
+import argparse
 import matplotlib.pyplot as plt
-from matplotlib import animation
+from matplotlib import animation as anim
 import numpy as np
-import sys
 
 
 def draw_poses(title, parents, pose_sequence):
@@ -19,7 +18,7 @@ def draw_poses(title, parents, pose_sequence):
     subplots = []
     all_lines = []
     for spi in range(N):
-        ax = fig.add_subplot(rows, cols, spi+1)
+        ax = fig.add_subplot(rows, cols, spi + 1)
         subplots.append(ax)
 
         sp_lines = []
@@ -54,32 +53,52 @@ def draw_poses(title, parents, pose_sequence):
                 joint_coord = sp_joints[frame, :, joint]
                 parent = parents[joint]
                 parent_coord = sp_joints[frame, :, parent]
-                line = lines[joint-1]
+                line = lines[joint - 1]
                 line.set_xdata((parent_coord[0], joint_coord[0]))
                 line.set_ydata((parent_coord[1], joint_coord[1]))
                 redrawn.append(line)
 
         return redrawn
 
-    return animation.FuncAnimation(fig, animate_step, frames=T, repeat=True,
-                                   fargs=(pose_sequence, parents, all_lines),
-                                   interval=1000*3/50.0, blit=True)
+    return anim.FuncAnimation(
+        fig,
+        animate_step,
+        frames=T,
+        repeat=True,
+        fargs=(pose_sequence, parents, all_lines),
+        interval=1000 * 3 / 50.0,
+        blit=True)
 
+
+parser = argparse.ArgumentParser()
+parser.add_argument(
+    'pose_path', help='path to .npz for poses')
+parser.add_argument(
+    '--video',
+    default=False,
+    action='store_true',
+    help='write video to path instead of displaying on screen')
 
 if __name__ == '__main__':
-    assert len(sys.argv) == 2, "Need exactly one argument (.npz path for poses)"
-    npz_path = sys.argv[1]
+    args = parser.parse_args()
+    npz_path = args.pose_path
     print('Loading %s' % npz_path)
     loaded = np.load(npz_path)
     parents = loaded['parents']
     pose_keys = sorted([k for k in loaded.keys() if k.startswith('poses_')])
-    print('Keys:', ','.join(pose_keys))
+    print('Keys:', ', '.join(pose_keys))
 
     anims = []
     for key in pose_keys:
-        if 'train' in key:
-            pass
-        anim = draw_poses(key, parents, loaded[key])
-        anims.append(anim)
+        this_anim = draw_poses(key, parents, loaded[key])
+        anims.append((key, this_anim))
 
-    plt.show()
+    if args.video:
+        # save video
+        print('Saving videos')
+        for key, seq in anims:
+            print('Working on', key)
+            seq.save(key + '.mp4', writer='ffmpeg', fps=50 / 3.0)
+    else:
+        print('Showing sequences')
+        plt.show()

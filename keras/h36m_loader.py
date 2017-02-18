@@ -17,6 +17,14 @@ GOOD_MOCAP_INDS = [
 ]
 # Remainder of the 99 entries are constant zero (apparently)
 TRUE_NUM_ENTRIES = 99
+# Used to create one-hot representations of actions used in a sequence
+ACTION_NAMES = [
+    None, 'directions', 'discussion', 'eating', 'greeting', 'phoning',
+    'posing', 'purchases', 'sitting', 'sittingdown', 'smoking', 'takingphoto',
+    'waiting', 'walking', 'walkingdog', 'walkingtogether'
+]
+ACTION_IDS = {name: index for index, name in enumerate(ACTION_NAMES)}
+NUM_ACTIONS = len(ACTION_NAMES)
 
 
 def insert_junk_entries(data):
@@ -26,7 +34,7 @@ def insert_junk_entries(data):
     return rv
 
 
-def prepare_file(filename, seq_length, seq_skip):
+def prepare_file(filename, seq_length, seq_skip, gap):
     poses = np.loadtxt(filename, delimiter=',')
     assert poses.ndim == 2 and poses.shape[1] == 99, poses.shape
 
@@ -37,12 +45,11 @@ def prepare_file(filename, seq_length, seq_skip):
     seqs = []
     true_length = seq_length * seq_skip
     end = len(poses) - true_length + 1
-    # TODO: Might not want to overlap sequences so much. Then again, it may not
-    # matter given that I'm shuffling anyway
-    for start in range(end):
+    for start in range(0, end, gap):
         seqs.append(poses[start:start + true_length:seq_skip])
+    X = np.stack(seqs)
 
-    return np.stack(seqs)
+    return X
 
 
 def is_valid(data):
@@ -54,17 +61,23 @@ _fnre = re.compile(r'^expmap_S(?P<subject>\d+)_(?P<action>.+).txt.gz$')
 
 def _mapper(arg):
     """Worker to load data in parallel"""
-    filename, seq_length, seq_skip = arg
+    filename, seq_length, seq_skip, gap = arg
     base = path.basename(filename)
     meta = _fnre.match(base).groupdict()
     subj_id = int(meta['subject'])
-    X = prepare_file(filename, seq_length, seq_skip)
+    X = prepare_file(filename, seq_length, seq_skip, gap)
+    action_name = meta['action'].split('_')[0]
+    action_id = ACTION_IDS[action_name]
+    actions = np.full(X.shape[:2], action_id, dtype='uint8')
 
-    return subj_id, filename, X
+    return subj_id, filename, X, actions
 
 
 def load_data(seq_length=32, seq_skip=3, val_subj_5=True,
-              return_actions=False):
+              return_actions=False, gap=17):
+    # seq_skip is downsample factor, seq_length is output length (after
+    # downsampling), gap is number of source frames to step forward between
+    # choosing outputs
     root = path.dirname(path.abspath(__file__))
     filenames = glob(path.join(root, 'h36m-3d-poses', 'expmap_*.txt.gz'))
     assert len(filenames) > 0, \
@@ -72,6 +85,9 @@ def load_data(seq_length=32, seq_skip=3, val_subj_5=True,
 
     train_X_blocks = []
     test_X_blocks = []
+    if return_actions:
+        train_action_blocks = []
+        test_action_blocks = []
 
     if not val_subj_5:
         # Need to make a pool of val_filenames
@@ -84,8 +100,8 @@ def load_data(seq_length=32, seq_skip=3, val_subj_5=True,
     print('Spawning pool')
     pool = Pool()
     try:
-        fn_seq = ((fn, seq_length, seq_skip) for fn in filenames)
-        for subj_id, filename, X in pool.map(_mapper, fn_seq):
+        fn_seq = ((fn, seq_length, seq_skip, gap) for fn in filenames)
+        for subj_id, filename, X, action_block in pool.map(_mapper, fn_seq):
             if val_subj_5:
                 is_val = subj_id == 5
             else:
@@ -93,8 +109,12 @@ def load_data(seq_length=32, seq_skip=3, val_subj_5=True,
             if is_val:
                 # subject 5 is for testing
                 test_X_blocks.append(X)
+                if return_actions:
+                    test_action_blocks.append(action_block)
             else:
                 train_X_blocks.append(X)
+                if return_actions:
+                    train_action_blocks.append(action_block)
     finally:
         pool.terminate()
 
@@ -102,8 +122,18 @@ def load_data(seq_length=32, seq_skip=3, val_subj_5=True,
     # handling here, so I'm being careful to delete large unneeded structures.
     train_X = np.concatenate(train_X_blocks, axis=0)
     del train_X_blocks
+    if return_actions:
+        train_action_ids = np.concatenate(train_action_blocks, axis=0)
+        del train_action_blocks
+        train_actions = np.arange(NUM_ACTIONS) == train_action_ids[..., None]
+        del train_action_ids
     test_X = np.concatenate(test_X_blocks, axis=0)
     del test_X_blocks
+    if return_actions:
+        test_action_ids = np.concatenate(test_action_blocks, axis=0)
+        del test_action_blocks
+        test_actions = np.arange(NUM_ACTIONS) == test_action_ids[..., None]
+        del test_action_ids
 
     N, T, D = train_X.shape
 
@@ -118,4 +148,8 @@ def load_data(seq_length=32, seq_skip=3, val_subj_5=True,
     assert is_valid(train_X)
     assert is_valid(test_X)
 
-    return train_X, test_X, mean, std
+    ret_vals = train_X, test_X, mean, std
+    if return_actions:  # make action block as well
+        ret_vals += (train_actions, test_actions, ACTION_NAMES)
+
+    return ret_vals
