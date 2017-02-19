@@ -1,8 +1,31 @@
 """Utilities for loading 2D pose sequences"""
 
 import numpy as np
+from scipy import stats, signal
 
-def preprocess_sequence(poses, parents):
+
+def gauss_filter(seq, sigma, filter_width=None):
+    if filter_width is None:
+        filter_width = int(np.ceil(4 * sigma))
+        if (filter_width % 2) == 0:
+            # make it odd-length (not sure how things work with even-length
+            # filters, TBH)
+            filter_width += 1
+    assert filter_width > 0, 'need a reasonably large filter'
+    extent = filter_width / 2.0
+    x_vals = np.linspace(-extent, extent, num=filter_width)
+    kern = stats.norm.pdf(x_vals, loc=0, scale=sigma)
+    kern = kern / np.sum(kern)
+    kern = kern.reshape((-1, 1))
+    # a 2D convolution is not strictly necessary (this is really only a 1D
+    # convolution across each channel), but I'm using it anyway because it
+    # supports boundary='symm' (symmetric padding)
+    smoothed = signal.convolve2d(seq, kern, mode='same', boundary='symm')
+    assert smoothed.shape == seq.shape
+    return smoothed
+
+
+def preprocess_sequence(poses, parents, smooth=False):
     """Preprocess a sequence of 2D poses to have more tractable representation.
     `parents` array is used to calculate output entries which are
     parent-relative joint locations. Note that standardisation will have to be
@@ -10,6 +33,12 @@ def preprocess_sequence(poses, parents):
     # Poses should be T*(XY)*J
     assert poses.ndim == 3, poses.shape
     assert poses.shape[1] == 2, poses.shape
+
+    if smooth:
+        pflat = poses.reshape((poses.shape[0], np.prod(poses.shape[1:])))
+        # remove high freq noise with reasonably narrow Gaussian
+        psmooth = gauss_filter(pflat, sigma=1)
+        poses = psmooth.reshape(poses.shape)
 
     # Scale so that person roughly fits in 1x1 box at origin
     scale = (np.max(poses, axis=2) - np.min(poses, axis=2)).flatten().std()
