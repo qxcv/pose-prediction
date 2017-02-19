@@ -9,6 +9,7 @@
 /todo.txt
 /keras/h36m-3d-poses/
 /penn
+*.h5
 
 # Editor cruft
 *.swp

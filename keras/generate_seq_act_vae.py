@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-
 """Try to jointly predict both future pose and future actions. Assumes a 2D
 pose sequence (think Ikea dataset, Cooking Activities, Penn Action, etc.) and
 performs normalisation on the fly."""
@@ -26,15 +25,13 @@ from scipy.stats import entropy
 
 import h5py
 
-
 VAL_FRAC = 0.2
-
 
 np.random.seed(2372143511)
 
 
 def make_decoder(num_actions, seq_length, noise_dim):
-    x = in_layer = Input(shape=(noise_dim,), name='dec_in')
+    x = in_layer = Input(shape=(noise_dim, ), name='dec_in')
     x = Dense(128)(x)
     x = Activation('relu')(x)
     x = Dense(128)(x)
@@ -56,7 +53,7 @@ def make_decoder(num_actions, seq_length, noise_dim):
 
 
 def make_encoder(pose_size, seq_length, noise_dim):
-    x = in_layer = Input(shape=(seq_length, pose_size,), name='enc_in')
+    x = in_layer = Input(shape=(seq_length, pose_size, ), name='enc_in')
     x = TimeDistributed(Dense(128))(x)
     x = Activation('relu')(x)
     x = TimeDistributed(Dense(128))(x)
@@ -103,15 +100,22 @@ def make_vae(pose_size, num_classes, args):
         copy_weights(saved_decoder, decoder)
 
     # Sample from encoder's output distribution
-    encoder_in = Input(shape=(seq_in_length, pose_size,))
+    encoder_in = Input(shape=(seq_in_length, pose_size, ))
     mean, var = encoder(encoder_in)
-    log_std = Lambda(lambda var: 0.5 * K.log(var), output_shape=(noise_dim,), name='log_std')(var)
-    std = Lambda(lambda var: K.sqrt(var), output_shape=(noise_dim,), name='std')(var)
+    log_std = Lambda(
+        lambda var: 0.5 * K.log(var),
+        output_shape=(noise_dim, ),
+        name='log_std')(var)
+    std = Lambda(
+        lambda var: K.sqrt(var), output_shape=(noise_dim, ), name='std')(var)
+
     def make_noise(layers):  # noqa
         mean, std = layers
         noise = K.random_normal(shape=K.shape(std), mean=0., std=1.)
         return noise * std + mean
-    latent = Lambda(make_noise, name='make_noise', output_shape=(noise_dim,))([mean, std])
+
+    latent = Lambda(
+        make_noise, name='make_noise', output_shape=(noise_dim, ))([mean, std])
 
     # Run latent variables through decoder
     decoder_out = decoder(latent)
@@ -123,7 +127,8 @@ def make_vae(pose_size, num_classes, args):
         mean, std, log_std = l
         return K.sum(K.square(mean) + std - log_std, axis=1) - noise_dim
 
-    kl_loss = Lambda(kl_inner, output_shape=(None,), name='kl_loss')([mean, std, log_std])
+    kl_loss = Lambda(
+        kl_inner, output_shape=(None, ), name='kl_loss')([mean, std, log_std])
 
     def kl_div(true, pred):
         return K.mean(kl_loss)
@@ -173,6 +178,12 @@ def preprocess_sequence(poses, parents):
     return shaped
 
 
+Data = namedtuple('Data', [
+    'train_X', 'train_Y', 'val_X', 'val_Y', 'mean', 'std', 'action_names',
+    'train_vids', 'val_vids', 'data_path'
+])
+
+
 def load_data(data_file, seq_in_length, seq_out_length, seq_skip):
     total_seq_len = max(seq_in_length, seq_out_length)
 
@@ -185,8 +196,9 @@ def load_data(data_file, seq_in_length, seq_out_length, seq_skip):
         parents = fp['/parents'].value
         num_actions = fp['/num_actions'].value.flatten()[0]
 
-        action_json_string = fp['/action_names'].value.tostring().decode('utf8')
-        # It's not really value JSON because it has a list at the root. Oh
+        action_json_string = fp['/action_names'].value.tostring().decode(
+            'utf8')
+        # It's not really valid JSON because it has a list at the root. Oh
         # well.
         action_names = ['n/a'] + json.loads(action_json_string)
 
@@ -200,7 +212,7 @@ def load_data(data_file, seq_in_length, seq_out_length, seq_skip):
 
         for vid_name in fp['seqs']:
             actions = fp['/seqs/' + vid_name + '/actions'].value
-            one_hot_acts = np.zeros((len(actions), num_actions+1))
+            one_hot_acts = np.zeros((len(actions), num_actions + 1))
             one_hot_acts[(range(len(actions)), actions)] = 1
 
             poses = fp['/seqs/' + vid_name + '/poses'].value
@@ -209,8 +221,10 @@ def load_data(data_file, seq_in_length, seq_out_length, seq_skip):
             assert len(relposes) == len(one_hot_acts)
 
             for i in range(len(relposes) - seq_skip * total_seq_len + 1):
-                in_block = relposes[i:i+seq_skip*seq_in_length:seq_skip][::-1]
-                out_block = one_hot_acts[i:i+seq_skip*seq_out_length:seq_skip]
+                in_block = relposes[i:i + seq_skip * seq_in_length:
+                                    seq_skip][::-1]
+                out_block = one_hot_acts[i:i + seq_skip * seq_out_length:
+                                         seq_skip]
 
                 assert in_block.ndim == 2 \
                     and in_block.shape[0] == seq_in_length, in_block.shape
@@ -235,10 +249,6 @@ def load_data(data_file, seq_in_length, seq_out_length, seq_skip):
     std[std < 1e-5] = 1
     train_X = (train_X - mean) / std
     val_X = (val_X - mean) / std
-
-    Data = namedtuple('Data', ['train_X', 'train_Y', 'val_X', 'val_Y', 'mean',
-                               'std', 'action_names', 'train_vids', 'val_vids',
-                               'data_path'])
 
     return Data(train_X, train_Y, val_X, val_Y, mean, std, action_names,
                 sorted(train_vids), sorted(val_vids), data_file)
@@ -296,8 +306,8 @@ def time_series_metrics(ground_truth, prediction_dict, action_names):
         accuracy_report += format_bname + acc_list + '\n'
 
         flat_baseline_int = baseline_int.flatten()
-        class_report = classification_report(flat_gt_int, flat_baseline_int,
-                                             target_names=action_names)
+        class_report = classification_report(
+            flat_gt_int, flat_baseline_int, target_names=action_names)
         full_report = ('## Stats for %s\n' % baseline_name) + class_report
         all_reports.append(full_report)
 
@@ -331,12 +341,14 @@ def train_model(data, args):
         actions_to_save = args.actions_to_save
         out_data = dict()
 
-        gen_actions = decoder.predict(np.random.randn(actions_to_save, args.noise_dim))
+        gen_actions = decoder.predict(
+            np.random.randn(actions_to_save, args.noise_dim))
         out_data['gen_actions'] = action_lists(gen_actions, data.action_names)
 
         train_inds = np.random.permutation(len(data.train_X))[:actions_to_save]
         train_actions = data.train_Y[train_inds]
-        out_data['train_actions'] = action_lists(train_actions, data.action_names)
+        out_data['train_actions'] = action_lists(train_actions,
+                                                 data.action_names)
 
         val_inds = np.random.permutation(len(data.val_X))[:actions_to_save]
         val_actions = data.val_Y[val_inds]
@@ -344,15 +356,15 @@ def train_model(data, args):
 
         out_data['action_names'] = data.action_names
 
-        out_path = path.join(args.action_dir, 'preds-epoch-%d.json' % (epoch + 1))
+        out_path = path.join(args.action_dir, 'preds-epoch-%d.json' %
+                             (epoch + 1))
         print('\nSaving samples to', out_path)
         with open(out_path, 'w') as fp:
             json.dump(out_data, fp)
 
     def model_paths(epoch, logs={}):
-        model_path = path.join(args.model_dir, 'epoch-{epoch:02d}'.format(
-            epoch=epoch
-        ))
+        model_path = path.join(
+            args.model_dir, 'epoch-{epoch:02d}'.format(epoch=epoch))
         encoder_path = model_path + '-enc.h5'
         decoder_path = model_path + '-dec.h5'
         return encoder_path, decoder_path
@@ -393,7 +405,10 @@ def train_model(data, args):
         sub_Y = data.val_Y[indices]
 
         # 'Extend' baseline. Repeats *last* action of input sequence.
-        ext_preds = np.repeat(sub_Y[:, args.seq_in_length-1:args.seq_in_length], args.seq_out_length, axis=1)
+        ext_preds = np.repeat(
+            sub_Y[:, args.seq_in_length - 1:args.seq_in_length],
+            args.seq_out_length,
+            axis=1)
         # Actual VAE baseline
         vae_preds = vae.predict(sub_X)
         # Fake VAE baseline in which the input has no bearing on the labels
@@ -418,12 +433,16 @@ def train_model(data, args):
         LambdaCallback(on_epoch_end=sample_trajectories),
         LambdaCallback(on_epoch_end=check_prediction_accuracy),
         LambdaCallback(on_epoch_end=save_encoder_decoder),
-        LambdaCallback(on_epoch_end=save_state),
-        ReduceLROnPlateau(patience=10)
+        LambdaCallback(on_epoch_end=save_state), ReduceLROnPlateau(patience=10)
     ]
-    vae.fit(data.train_X, data.train_Y, validation_data=(data.val_X, data.val_Y),
-            shuffle=True, batch_size=args.batch_size, nb_epoch=1000,
-            callbacks=cb_list)
+    vae.fit(
+        data.train_X,
+        data.train_Y,
+        validation_data=(data.val_X, data.val_Y),
+        shuffle=True,
+        batch_size=args.batch_size,
+        nb_epoch=1000,
+        callbacks=cb_list)
 
     return vae, encoder, decoder
 
@@ -432,26 +451,66 @@ def train_model(data, args):
 # - Coefficient on KL divergence term
 
 parser = ArgumentParser()
-parser.add_argument('--lr', type=float, dest='init_lr', default=0.0001,
-                    help='initial learning rate')
-parser.add_argument('--work-dir', type=str, dest='work_dir', default='./seq-act-vae',
-                    help='parent directory to store state')
-parser.add_argument('--seq-in-length', type=int, dest='seq_in_length', default=16,
-                    help='length of input sequence')
-parser.add_argument('--seq-out-length', type=int, dest='seq_out_length', default=16,
-                    help='length of sequence to predict (may overlap)')
-parser.add_argument('--save-actions', type=int, dest='actions_to_save', default=32,
-                    help='number of sample action seqs to save at each epoch')
-parser.add_argument('--seq-skip', type=int, dest='seq_skip', default=3,
-                    help='factor by which to temporally downsample data')
-parser.add_argument('--batch-size', type=int, dest='batch_size', default=64,
-                    help='size of training batch')
-parser.add_argument('--noise-dim', type=int, dest='noise_dim', default=64,
-                    help='number of latent variables')
-parser.add_argument('--data-file', type=str, dest='data_file', default=None,
-                    help='HDF5 file containing poses')
-parser.add_argument('--no-resume', action='store_false', dest='resume', default=True,
-                    help='stop automatic training resumption from checkpoint')
+parser.add_argument(
+    '--lr',
+    type=float,
+    dest='init_lr',
+    default=0.0001,
+    help='initial learning rate')
+parser.add_argument(
+    '--work-dir',
+    type=str,
+    dest='work_dir',
+    default='./seq-act-vae',
+    help='parent directory to store state')
+parser.add_argument(
+    '--seq-in-length',
+    type=int,
+    dest='seq_in_length',
+    default=16,
+    help='length of input sequence')
+parser.add_argument(
+    '--seq-out-length',
+    type=int,
+    dest='seq_out_length',
+    default=16,
+    help='length of sequence to predict (may overlap)')
+parser.add_argument(
+    '--save-actions',
+    type=int,
+    dest='actions_to_save',
+    default=32,
+    help='number of sample action seqs to save at each epoch')
+parser.add_argument(
+    '--seq-skip',
+    type=int,
+    dest='seq_skip',
+    default=3,
+    help='factor by which to temporally downsample data')
+parser.add_argument(
+    '--batch-size',
+    type=int,
+    dest='batch_size',
+    default=64,
+    help='size of training batch')
+parser.add_argument(
+    '--noise-dim',
+    type=int,
+    dest='noise_dim',
+    default=64,
+    help='number of latent variables')
+parser.add_argument(
+    '--data-file',
+    type=str,
+    dest='data_file',
+    default=None,
+    help='HDF5 file containing poses')
+parser.add_argument(
+    '--no-resume',
+    action='store_false',
+    dest='resume',
+    default=True,
+    help='stop automatic training resumption from checkpoint')
 
 
 def add_extra_paths(args):
@@ -497,7 +556,8 @@ if __name__ == '__main__':
 
     print('Loading data')
     seq_length = max(args.seq_in_length, args.seq_out_length)
-    data = load_data(args.data_file, args.seq_in_length, args.seq_out_length, args.seq_skip)
+    data = load_data(args.data_file, args.seq_in_length, args.seq_out_length,
+                     args.seq_skip)
     print('Data loaded')
 
     print('Making directories')
