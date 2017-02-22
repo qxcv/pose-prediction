@@ -90,7 +90,8 @@ if __name__ == '__main__':
             fp[prefix + 'poses'] = relpose
             fp[prefix + 'actions'] = np.full((len(relpose),), action_id)
         fp['/parents'] = np.array(PARENTS, dtype=int)
-        fp['/action_names'] = dumps(ACTION_NAMES)
+        fp['/action_names'] = np.array([chr(c) for c in dumps(ACTION_NAMES)],
+                                       dtype='uint8')
         fp['/num_actions'] = len(ACTION_NAMES)
         if skipped:
             print('WARNING: skipped %i seq(s) due to scale:' % len(skipped),
