@@ -89,3 +89,35 @@ def reconstruct_poses(flat_poses, parents):
         true_poses[:, :, :, joint] = parent_pos + offsets
 
     return true_poses
+
+
+def runs(vec):
+    assert vec.ndim == 1
+    # mask vec indicating whether given element is a run end
+    run_ends = np.empty_like(vec, dtype='bool')
+    run_ends[-1] = True
+    run_ends[:-1] = vec[:-1] != vec[1:]
+    run_length = np.cumsum(run_ends)
+
+    run_stops = np.nonzero(run_ends) + 1
+    run_starts = np.empty_like(vec, dtype='int')
+    run_starts[0] = 0
+    run_starts[1:] = run_end_inds[:-1]
+
+    act_vals = vec[run_starts]
+
+    return list(zip(act_vals, starts, stops))
+
+
+def extract_action_dataset(feats, actions, min_length=10):
+    """Given pose sequence and action, return pairs of form (pose sequence, action label)"""
+    # need T*D features (T time, D dimensionality of features)
+    assert feats.ndim == 2, poses.shape
+    # actions should be single array of action numbers
+    assert actions.ndim == 1, actions.shape
+    pairs = []
+    for action, start, stop in runs(actions):
+        if stop - start < min_length:
+            continue
+        pairs.append((feats[start:stop], action))
+    return pairs
