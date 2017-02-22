@@ -5,6 +5,8 @@ from scipy import stats, signal
 
 
 def gauss_filter(seq, sigma, filter_width=None):
+    """Filter a 2D signal, where first dimension is time, and second is data
+    channels."""
     if filter_width is None:
         filter_width = int(np.ceil(4 * sigma))
         if (filter_width % 2) == 0:
@@ -25,7 +27,42 @@ def gauss_filter(seq, sigma, filter_width=None):
     return smoothed
 
 
-def preprocess_sequence(poses, parents, smooth=False):
+def is_toposorted_tree(parents):
+    """Check that parents array defines toposorted tree (root-first)."""
+    root_connected = [False] * len(parents)
+    for ch, pa in enumerate(parents):
+        if ch == 0:
+            # root must loop back on itself
+            invalid = pa != 0
+        else:
+            # bad scenarios: parent might occur later, or might not be
+            # connected to a root (and thus form a separate tree in a forest)
+            invalid = pa >= ch or not root_connected[pa]
+        if invalid:
+            return False
+        root_connected[ch] = True
+    return True
+
+
+def remove_head(poses, parents):
+    """Removes joint 0 (usually head) from the pose tree. At the moment, it
+    requires joint 0 to have only one child (but there's no theoretical reason
+    for that; you could just as easily average several children to create a new
+    root). Could also extend to removing arbitrary joints relatively easily."""
+    assert is_toposorted_tree(parents)
+
+    children = [ch for ch, pa in enumerate(parents) if pa == to_remove]
+    assert children[0] <= 1, "only supports one child at the moment"
+
+    new_parents = [p - 1 for p in parents[1:]]
+    assert is_toposorted_tree(new_parents)
+    assert poses.ndim == 3, "need poses (shape %s) to be T,XY,J" % poses.shape
+    new_poses = poses[:, :, 1:]
+
+    return new_poses, new_parents
+
+
+def preprocess_sequence(poses, parents, smooth=False, remove_head=False):
     """Preprocess a sequence of 2D poses to have more tractable representation.
     `parents` array is used to calculate output entries which are
     parent-relative joint locations. Note that standardisation will have to be
@@ -35,10 +72,14 @@ def preprocess_sequence(poses, parents, smooth=False):
     assert poses.shape[1] == 2, poses.shape
 
     if smooth:
+        # Remove high freq noise with reasonably narrow Gaussian. Channel-wise,
+        # so can be applied before anything else.
         pflat = poses.reshape((poses.shape[0], np.prod(poses.shape[1:])))
-        # remove high freq noise with reasonably narrow Gaussian
         psmooth = gauss_filter(pflat, sigma=1)
         poses = psmooth.reshape(poses.shape)
+
+    if remove_head:
+        poses, parents = remove_head(poses, parents)
 
     # Scale so that person roughly fits in 1x1 box at origin
     scale = (np.max(poses, axis=2) - np.min(poses, axis=2)).flatten().std()
