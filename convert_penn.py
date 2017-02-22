@@ -5,9 +5,12 @@
 from argparse import ArgumentParser
 from glob import glob
 from h5py import File
+from json import dumps
 import numpy as np
 from os import path
 from scipy.io import loadmat
+import sys
+from textwrap import wrap
 from tqdm import tqdm
 
 # Joint indices from README:
@@ -23,6 +26,12 @@ from tqdm import tqdm
 PARENTS = [0,     0,     0,     1,     2,     3,     4,    1,    2,   7,    8,
 #       lk11, rk12  # noqa
            9,   10]
+ACTION_NAMES = [
+    'baseball_pitch', 'baseball_swing', 'bench_press', 'bowl',
+    'clean_and_jerk', 'golf_swing', 'jump_rope', 'jumping_jacks', 'pullup',
+    'pushup', 'situp', 'squat', 'strum_guitar', 'tennis_forehand',
+    'tennis_serve'
+]
 
 parser = ArgumentParser()
 parser.add_argument('penn_path', help='path to Penn Action dataset')
@@ -48,11 +57,12 @@ def load_seq(mat_path):
     hsd_rl = np.linalg.norm(joints[:, 2] - joints[:, 7], axis=1)
     scale = np.median(np.concatenate((hsd_lr, hsd_rl)))
     # Make sure that scale is sane
-    assert 20 < abs(scale) < 800, scale
+    if abs(scale) < 40 or abs(scale) > 400:
+        return None
     joints /= scale
 
     # Compute actual data (relative offsets are easier to learn)
-    relpose = np.zeros_like(joints)
+    relpose = np.zeros_like(joints, dtype='float32')
     relpose[0, 0, :] = 0
     # Head position records delta from previous frame
     relpose[1:, 0] = joints[1:, 0] - joints[:-1, 0]
@@ -68,10 +78,21 @@ if __name__ == '__main__':
     args = parser.parse_args()
     file_list = glob(path.join(args.penn_path, 'labels', '*.mat'))
     with File(args.dest, 'w') as fp:
-        action_ids = {}
+        skipped = []
         for mat_path in tqdm(file_list):
-            id_str, relpose, action = load_seq(mat_path)
+            rv = load_seq(mat_path)
+            if rv is None:
+                skipped.append(mat_path)
+                continue
+            id_str, relpose, action = rv
+            action_id = ACTION_NAMES.index(action)
             prefix = '/seqs/' + id_str + '/'
             fp[prefix + 'poses'] = relpose
-            fp[prefix + 'action'] = action
+            fp[prefix + 'actions'] = np.full((len(relpose),), action_id)
         fp['/parents'] = np.array(PARENTS, dtype=int)
+        fp['/action_names'] = dumps(ACTION_NAMES)
+        fp['/num_actions'] = len(ACTION_NAMES)
+        if skipped:
+            print('WARNING: skipped %i seq(s) due to scale:' % len(skipped),
+                  file=sys.stderr)
+            print('\n'.join(wrap(', '.join(skipped))))
