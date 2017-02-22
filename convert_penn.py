@@ -71,6 +71,10 @@ def load_seq(mat_path):
         pa = PARENTS[jt]
         relpose[:, jt] = joints[:, jt] - joints[:, pa]
 
+    # move joints to second position
+    relpose = relpose.transpose((0, 2, 1))
+    assert relpose.shape[1] == 2
+
     return id_str, relpose, mat['action']
 
 
@@ -90,7 +94,7 @@ if __name__ == '__main__':
             fp[prefix + 'poses'] = relpose
             fp[prefix + 'actions'] = np.full((len(relpose),), action_id)
         fp['/parents'] = np.array(PARENTS, dtype=int)
-        fp['/action_names'] = np.array([chr(c) for c in dumps(ACTION_NAMES)],
+        fp['/action_names'] = np.array([ord(c) for c in dumps(ACTION_NAMES)],
                                        dtype='uint8')
         fp['/num_actions'] = len(ACTION_NAMES)
         if skipped:
