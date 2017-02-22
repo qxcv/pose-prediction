@@ -10,3 +10,5 @@
 *.zip
 *.json
 events.out.tfevents.*
+h36m-3d-poses
+seq-act-vae/
