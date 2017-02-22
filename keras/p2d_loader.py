@@ -2,6 +2,9 @@
 
 import numpy as np
 from scipy import stats, signal
+import json
+import h5py
+from collections import namedtuple
 
 
 def gauss_filter(seq, sigma, filter_width=None):
@@ -51,7 +54,7 @@ def remove_head(poses, parents):
     root). Could also extend to removing arbitrary joints relatively easily."""
     assert is_toposorted_tree(parents)
 
-    children = [ch for ch, pa in enumerate(parents) if pa == to_remove]
+    children = [ch for ch, pa in enumerate(parents) if pa == 0 and ch != 0]
     assert children[0] <= 1, "only supports one child at the moment"
 
     new_parents = [p - 1 for p in parents[1:]]
@@ -140,7 +143,6 @@ def runs(vec):
     run_ends = np.empty_like(vec, dtype='bool')
     run_ends[-1] = True
     run_ends[:-1] = vec[:-1] != vec[1:]
-    run_length = np.cumsum(run_ends)
 
     # Now we get indices. start:stop is meant to delimit values.
     run_stops = np.nonzero(run_ends)[0] + 1
@@ -154,9 +156,10 @@ def runs(vec):
 
 
 def extract_action_dataset(feats, actions, min_length=5):
-    """Given pose sequence and action, return pairs of form (pose sequence, action label)"""
+    """Given pose sequence and action, return pairs of form (pose sequence,
+    action label)"""
     # need T*D features (T time, D dimensionality of features)
-    assert feats.ndim == 2, poses.shape
+    assert feats.ndim == 2, feats.shape
     # actions should be single array of action numbers
     assert actions.ndim == 1, actions.shape
     pairs = []
@@ -169,6 +172,102 @@ def extract_action_dataset(feats, actions, min_length=5):
         total_len += length
         pairs.append((feats[start:stop], action))
     if len(pairs) < len(all_runs):
-        print('%i/%i sequences were too short; still got %i frames, though'
-              % (len(all_runs) - len(pairs), len(all_runs), total_len))
+        print('%i/%i sequences were too short; still got %i frames, though' %
+              (len(all_runs) - len(pairs), len(all_runs), total_len))
     return pairs
+
+
+Data = namedtuple('Data', [
+    'train_poses', 'train_actions', 'val_poses', 'val_actions', 'mean', 'std',
+    'action_names', 'train_vids', 'val_vids', 'data_path', 'parents',
+    'train_aclass_ds', 'val_aclass_ds'
+])
+
+
+def load_p2d_data(data_file,
+                  seq_length,
+                  seq_skip,
+                  gap=1,
+                  val_frac=0.2,
+                  add_noise=0.6):
+    train_pose_blocks = []
+    train_action_blocks = []
+    train_aclass_ds = []
+    val_pose_blocks = []
+    val_action_blocks = []
+    val_aclass_ds = []
+
+    # for deterministic val set split
+    srng = np.random.RandomState(seed=8904511)
+
+    with h5py.File(data_file, 'r') as fp:
+        parents = fp['/parents'].value
+        num_actions = fp['/num_actions'].value.flatten()[0]
+
+        action_json_string = fp['/action_names'].value.tostring().decode(
+            'utf8')
+        action_names = ['n/a'] + json.loads(action_json_string)
+
+        vid_names = list(fp['seqs'])
+        val_vid_list = list(vid_names)
+        srng.shuffle(val_vid_list)
+        val_count = max(1, int(val_frac * len(val_vid_list)))
+        val_vids = set(val_vid_list[:val_count])
+        train_vids = set(val_vid_list) - val_vids
+
+        for vid_name in fp['seqs']:
+            actions = fp['/seqs/' + vid_name + '/actions'].value
+            # `cert` chance of choosing correct action directly, `1 - cert`
+            # chance of choosing randomly (maybe gets correct action)
+            if add_noise is not None:
+                cert = add_noise
+            else:
+                cert = 1
+            one_hot_acts = (1 - cert) * np.ones(
+                (len(actions), num_actions + 1)) / (num_actions + 1)
+            # XXX: This is an extremely hacky way of injecting noise :/
+            one_hot_acts[(range(len(actions)), actions)] += cert
+            # actions should form prob dist., roughly
+            assert np.all(np.abs(1 - one_hot_acts.sum(axis=1)) < 0.001)
+
+            poses = fp['/seqs/' + vid_name + '/poses'].value
+            relposes = preprocess_sequence(poses, parents, smooth=True)
+
+            assert len(relposes) == len(one_hot_acts)
+
+            aclass_list = extract_action_dataset(relposes, actions)
+            if vid_name in val_vids:
+                val_aclass_ds.extend(aclass_list)
+            else:
+                train_aclass_ds.extend(aclass_list)
+
+            for i in range(len(relposes) - seq_skip * seq_length + 1):
+                pose_block = relposes[i:i + seq_skip * seq_length:seq_skip]
+                act_block = one_hot_acts[i:i + seq_skip * seq_length:seq_skip]
+
+                if vid_name in val_vids:
+                    train_pose_blocks.append(pose_block)
+                    train_action_blocks.append(act_block)
+                else:
+                    val_pose_blocks.append(pose_block)
+                    val_action_blocks.append(act_block)
+
+    train_poses = np.stack(train_pose_blocks, axis=0).astype('float32')
+    train_actions = np.stack(train_action_blocks, axis=0).astype('float32')
+    val_poses = np.stack(val_pose_blocks, axis=0).astype('float32')
+    val_actions = np.stack(val_action_blocks, axis=0).astype('float32')
+
+    flat_poses = train_poses.reshape((-1, train_poses.shape[-1]))
+    mean = flat_poses.mean(axis=0).reshape((1, 1, -1))
+    std = flat_poses.std(axis=0).reshape((1, 1, -1))
+    # TODO: Smarter handling of std. Will also need to use smarter
+    # handling in actual loader script used by train.py
+    std[std < 1e-5] = 1
+    train_poses = (train_poses - mean) / std
+    val_poses = (val_poses - mean) / std
+
+    return Data(train_poses, train_actions, val_poses, val_actions, mean, std,
+                action_names,
+                sorted(train_vids),
+                sorted(val_vids), data_file, parents, train_aclass_ds,
+                val_aclass_ds)
