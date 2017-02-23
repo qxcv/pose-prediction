@@ -189,24 +189,31 @@ def load_p2d_data(data_file,
                   seq_skip,
                   gap=1,
                   val_frac=0.2,
-                  add_noise=0.6):
+                  add_noise=0.6,
+                  load_actions=True):
     train_pose_blocks = []
-    train_action_blocks = []
-    train_aclass_ds = []
     val_pose_blocks = []
-    val_action_blocks = []
-    val_aclass_ds = []
+    if load_actions:
+        train_action_blocks = []
+        train_aclass_ds = []
+        val_action_blocks = []
+        val_aclass_ds = []
+    else:
+        train_aclass_ds = val_aclass_ds = None
 
     # for deterministic val set split
     srng = np.random.RandomState(seed=8904511)
 
     with h5py.File(data_file, 'r') as fp:
         parents = fp['/parents'].value
-        num_actions = fp['/num_actions'].value.flatten()[0]
 
-        action_json_string = fp['/action_names'].value.tostring().decode(
-            'utf8')
-        action_names = ['n/a'] + json.loads(action_json_string)
+        if load_actions:
+            num_actions = fp['/num_actions'].value.flatten()[0]
+            action_json_string = fp['/action_names'].value.tostring().decode(
+                'utf8')
+            action_names = ['n/a'] + json.loads(action_json_string)
+        else:
+            action_names = None
 
         vid_names = list(fp['seqs'])
         val_vid_list = list(vid_names)
@@ -216,52 +223,62 @@ def load_p2d_data(data_file,
         train_vids = set(val_vid_list) - val_vids
 
         for vid_name in fp['seqs']:
-            actions = fp['/seqs/' + vid_name + '/actions'].value
-            # `cert` chance of choosing correct action directly, `1 - cert`
-            # chance of choosing randomly (maybe gets correct action)
-            if add_noise is not None:
-                cert = add_noise
-            else:
-                cert = 1
-            one_hot_acts = (1 - cert) * np.ones(
-                (len(actions), num_actions + 1)) / (num_actions + 1)
-            # XXX: This is an extremely hacky way of injecting noise :/
-            one_hot_acts[(range(len(actions)), actions)] += cert
-            # actions should form prob dist., roughly
-            assert np.all(np.abs(1 - one_hot_acts.sum(axis=1)) < 0.001)
-
             poses = fp['/seqs/' + vid_name + '/poses'].value
             relposes = preprocess_sequence(poses, parents, smooth=True)
 
-            assert len(relposes) == len(one_hot_acts)
+            if load_actions:
+                actions = fp['/seqs/' + vid_name + '/actions'].value
+                # `cert` chance of choosing correct action directly, `1 - cert`
+                # chance of choosing randomly (maybe gets correct action)
+                if add_noise is not None:
+                    cert = add_noise
+                else:
+                    cert = 1
+                one_hot_acts = (1 - cert) * np.ones(
+                    (len(actions), num_actions + 1)) / (num_actions + 1)
+                # XXX: This is an extremely hacky way of injecting noise :/
+                one_hot_acts[(range(len(actions)), actions)] += cert
+                # actions should form prob dist., roughly
+                assert np.all(np.abs(1 - one_hot_acts.sum(axis=1)) < 0.001)
+                assert len(relposes) == len(one_hot_acts)
 
-            aclass_list = extract_action_dataset(relposes, actions)
-            if vid_name in val_vids:
-                val_aclass_ds.extend(aclass_list)
-            else:
-                train_aclass_ds.extend(aclass_list)
+                aclass_list = extract_action_dataset(relposes, actions)
+                if vid_name in val_vids:
+                    val_aclass_ds.extend(aclass_list)
+                else:
+                    train_aclass_ds.extend(aclass_list)
 
-            for i in range(len(relposes) - seq_skip * seq_length + 1):
+            range_count = len(relposes) - seq_skip * seq_length + 1
+            for i in range(0, range_count, gap):
                 pose_block = relposes[i:i + seq_skip * seq_length:seq_skip]
-                act_block = one_hot_acts[i:i + seq_skip * seq_length:seq_skip]
+
+                if load_actions:
+                    sk = seq_skip
+                    sl = seq_length
+                    act_block = one_hot_acts[i:i+sk*sl:sk]
 
                 if vid_name in val_vids:
                     train_pose_blocks.append(pose_block)
-                    train_action_blocks.append(act_block)
+                    if load_actions:
+                        train_action_blocks.append(act_block)
                 else:
                     val_pose_blocks.append(pose_block)
-                    val_action_blocks.append(act_block)
+                    if load_actions:
+                        val_action_blocks.append(act_block)
 
     train_poses = np.stack(train_pose_blocks, axis=0).astype('float32')
-    train_actions = np.stack(train_action_blocks, axis=0).astype('float32')
     val_poses = np.stack(val_pose_blocks, axis=0).astype('float32')
-    val_actions = np.stack(val_action_blocks, axis=0).astype('float32')
+    if load_actions:
+        train_actions = np.stack(train_action_blocks, axis=0).astype('float32')
+        val_actions = np.stack(val_action_blocks, axis=0).astype('float32')
+    else:
+        train_actions = val_actions = None
 
     flat_poses = train_poses.reshape((-1, train_poses.shape[-1]))
     mean = flat_poses.mean(axis=0).reshape((1, 1, -1))
     std = flat_poses.std(axis=0).reshape((1, 1, -1))
-    # TODO: Smarter handling of std. Will also need to use smarter
-    # handling in actual loader script used by train.py
+    # setting low stds to 1 will have effect of making low-variance features
+    # (almost) constant zero
     std[std < 1e-5] = 1
     train_poses = (train_poses - mean) / std
     val_poses = (val_poses - mean) / std
