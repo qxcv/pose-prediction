@@ -1,4 +1,18 @@
 classdef IkeaDB < handle
+    % Pieces of data which this needs to run:
+    %
+    % 1 IkeaDataset/IkeaClipsDB_withactions.mat: from IkeaDataset/ in
+    %   /data/home/cherian.
+    %
+    % 2 IkeaDatset/tmp2/: this is actually a pose directory. Again, linking
+    %   ./IkeaDataset to /data/home/cherian/IkeaDataset should grant this.
+    %
+    % 3 ./ikea_estimated_actions.h5: HDF5 file mapping GOPRXXXX IDs to
+    %   collections of action probability vectors produced by an action
+    %   recognition network. Scripts to produce this are currently somewhat
+    %   ad-hoc, since they depend on a trained network in Anoop's home dir
+    %   (which has to be converted to work with Keras, etc.).
+    
     properties(Constant)
         % Parents array
         PA = [1 1 2 3 4 2 6 7];
@@ -25,61 +39,14 @@ classdef IkeaDB < handle
                 root = './IkeaDataset';
             end
             obj.root = root;
-            
             % Load clip database itself
             obj.data = loadout(fullfile(root, 'IkeaClipsDB_withactions.mat'), 'IkeaDB');
             
-            % Load all poses; obj.poses will have some gaps (e.g. clip 27
-            % is missing)
-            vid_ids = unique([obj.data.video_id]);
-            nclips = max(vid_ids);
-            obj.poses = cell([1, nclips]);
-            obj.vid_clip_ids = zeros([1, nclips]);
-            for i=vid_ids
-                fn = sprintf('pose_clip_%i.mat', i);
-                path = fullfile(obj.root, 'tmp2', fn);
-                obj.poses{i} = loadout(path, 'pose');
-            end
-            
-            obj.internal_to_gopro_num = nan([1 max(vid_ids)]);
-            for i=1:length(obj.data)
-                % This is for matching up with actions (which are mapped
-                % from video IDs), joining poses together, etc.
-                parts = strsplit(obj.data(i).clip_path, '/');
-                vid_id = sscanf(parts{end}, 'GOPR%d');
-                assert(0 < vid_id && vid_id < 200);
-                obj.vid_clip_ids(i) = vid_id;
-                obj.internal_to_gopro_num(obj.data(i).video_id) = vid_id;
-            end
-            
-            % Subjects 9, 11 and 13 are for testing. The rest are for
-            % training. I'm going to arbitrarily train on [1, 2, 4, 5, 7, 8
-            % 10, 12, 15].
-            obj.subj_ids = [obj.data.person_idx];
-            obj.is_train = ismember(obj.subj_ids, [1, 2, 4, 6, 7, 8, 10, 12, 15]);
-            obj.is_test = ismember(obj.subj_ids, [9 11 13]);
-            obj.has_anno = ~cellfun(@isempty, {obj.data.annot_test_poses});
-            no_anno = find(obj.is_test & ~obj.has_anno);
-            
-            if ~isempty(no_anno)
-                warning('pp:MissingTestAnno', ...
-                    '%d/%d test items have no manual annotation', ...
-                    length(no_anno), sum(obj.is_test));
-                % display(no_anno);
-            end
-            obj.is_test = obj.is_test & obj.has_anno;
-            obj.is_val = ~(obj.is_train | obj.is_test);
-            
-            % Load action annotations.
-            obj.act_data = loadout(fullfile(root, 'ActionAnnotations', ...
-                'activity_Ikea'), 'activity_Ikea');
-            obj.act_names = unique([obj.act_data.action_label]);
-            for i=1:length(obj.act_data)
-                action_name = obj.act_data(i).action_label;
-                action_id = find(strcmp(obj.act_names, action_name));
-                assert(length(action_id) == 1);
-                obj.act_data(i).action_id = action_id;
-            end
+            obj.load_poses();
+            obj.map_gopro_ids();
+            obj.mark_train_test();
+            obj.load_true_acts();
+            obj.load_approx_acts();
         end
         
         function [starts, ends, actions] = seqactions(obj, video_id)
@@ -129,14 +96,14 @@ classdef IkeaDB < handle
             end
         end
         
-        function video_poses(obj, video_num)
-            % Get all poses for a single video
-            % TODO
-            match_name = sprintf('GOPR%04i', info.anno.video_id);
-            for i=1:length(obj.data)
-                dbi = obj.data(i);
-            end
-        end
+%         function video_poses(obj, video_num)
+%             % Get all poses for a single video
+%             % TODO
+%             match_name = sprintf('GOPR%04i', info.anno.video_id);
+%             for i=1:length(obj.data)
+%                 dbi = obj.data(i);
+%             end
+%         end
         
         function show_pose(obj, seq_id, pose_id, det_pose)
             info = obj.seqinfo(seq_id);
@@ -158,6 +125,98 @@ classdef IkeaDB < handle
         function out = pframe(fn)
             out = sscanf(fn, 'frame_%d.jpg');
             assert(isscalar(out));
+        end
+    end
+    
+    methods(Access = private)
+        % these methods are just called sequentially by the constructor
+        % they've only been split out to make it clear what the different
+        % bits of code do
+        
+        function load_poses(obj)
+            % Load all poses; obj.poses will have some gaps (e.g. clip 27
+            % is missing)
+            vid_ids = unique([obj.data.video_id]);
+            nclips = max(vid_ids);
+            obj.poses = cell([1, nclips]);
+            obj.vid_clip_ids = zeros([1, nclips]);
+            for i=vid_ids
+                fn = sprintf('pose_clip_%i.mat', i);
+                path = fullfile(obj.root, 'tmp2', fn);
+                obj.poses{i} = loadout(path, 'pose');
+            end
+        end
+        
+        function map_gopro_ids(obj)
+            vid_ids = unique([obj.data.video_id]);
+            obj.internal_to_gopro_num = nan([1 max(vid_ids)]);
+            for i=1:length(obj.data)
+                % This is for matching up with actions (which are mapped
+                % from video IDs), joining poses together, etc.
+                parts = strsplit(obj.data(i).clip_path, '/');
+                vid_id = sscanf(parts{end}, 'GOPR%d');
+                assert(0 < vid_id && vid_id < 200);
+                obj.vid_clip_ids(i) = vid_id;
+                obj.internal_to_gopro_num(obj.data(i).video_id) = vid_id;
+            end
+        end
+        
+        function mark_train_test(obj)
+            % Subjects 9, 11 and 13 are for testing. The rest are for
+            % training. I'm going to arbitrarily train on [1, 2, 4, 5, 7, 8
+            % 10, 12, 15].
+            obj.subj_ids = [obj.data.person_idx];
+            obj.is_train = ismember(obj.subj_ids, [1, 2, 4, 6, 7, 8, 10, 12, 15]);
+            obj.is_test = ismember(obj.subj_ids, [9 11 13]);
+            if isfield(obj.data, 'annot_test_poses')
+                obj.has_anno = ~cellfun(@isempty, {obj.data.annot_test_poses});
+            else
+                warning('pp:AllAnnoMissing', ['Could not find ' ...
+                    'annot_test_poses. Will not matter if you don''t ' ...
+                    'care about the manually labelled poses.']);
+                obj.has_anno = false([1 length(obj.data)]);
+            end
+            no_anno = find(obj.is_test & ~obj.has_anno);
+            
+            if ~isempty(no_anno)
+                warning('pp:SomeAnnoMissing', ...
+                    '%d/%d test items have no manual annotation', ...
+                    length(no_anno), sum(obj.is_test));
+                % display(no_anno);
+            end
+            obj.is_test = obj.is_test & obj.has_anno;
+            obj.is_val = ~(obj.is_train | obj.is_test);
+        end
+
+        function load_true_acts(obj)
+            % Load action annotations.
+            obj.act_data = loadout(fullfile(obj.root, 'ActionAnnotations', ...
+                'activity_Ikea'), 'activity_Ikea');
+            obj.act_names = unique([obj.act_data.action_label]);
+            for i=1:length(obj.act_data)
+                action_name = obj.act_data(i).action_label;
+                action_id = find(strcmp(obj.act_names, action_name));
+                assert(length(action_id) == 1);
+                obj.act_data(i).action_id = action_id;
+            end
+        end
+        
+        function load_approx_acts(obj)
+            % attempt to load approximate 
+            act_path = './ikea_estimated_actions.h5';
+            if ~exist(act_path, 'file')
+                warning('pp:NoEstimatedActions', ...
+                    'Could not find estimated actions at %s, skipping', ...
+                    act_path);
+                return
+            end
+            
+            id_map = containers.Map('KeyType', 'char', 'ValueType', 'char');
+            % TODO: finish this method
+            for datidx=1:length(obj.data)
+                continue
+                % gopro_id = obj.internal_to_gopro_num(datidx);
+            end
         end
     end
 end
