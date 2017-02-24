@@ -69,21 +69,12 @@ def load_seq(mat_dir):
         return None
     joints /= scale
 
-    # Compute actual data (relative offsets are easier to learn)
-    relpose = np.zeros_like(joints, dtype='float32')
-    relpose[0, 0, :] = 0
-    # Head position records delta from previous frame
-    relpose[1:, 0] = joints[1:, 0] - joints[:-1, 0]
-    # Other joints record delta from parents
-    for jt in range(1, len(PARENTS)):
-        pa = PARENTS[jt]
-        relpose[:, jt] = joints[:, jt] - joints[:, pa]
+    # Need to be T*XY*J
+    joints = joints.transpose((0, 2, 1))
+    assert joints.shape[1] == 2, joints.shape
+    assert joints.shape[0] == len(mat_paths), joints.shape
 
-    # move joints to second position
-    relpose = relpose.transpose((0, 2, 1))
-    assert relpose.shape[1] == 2
-
-    return relpose
+    return joints
 
 
 if __name__ == '__main__':
@@ -94,16 +85,16 @@ if __name__ == '__main__':
         with Pool() as p:
             seq_iter = p.imap(load_seq, dir_list)
             zipper = zip(dir_list, seq_iter)
-            for dir_path, relpose in tqdm(zipper, total = len(dir_list)):
-                relpose = load_seq(dir_path)
+            for dir_path, joints in tqdm(zipper, total = len(dir_list)):
+                joints = load_seq(dir_path)
                 id_str = path.basename(dir_path)
-                if relpose is None:
+                if joints is None:
                     skipped.append(id_str)
                     continue
                 # action_id = ACTION_NAMES.index(action)
                 prefix = '/seqs/' + id_str + '/'
-                fp[prefix + 'poses'] = relpose
-                # fp[prefix + 'actions'] = np.full((len(relpose),), action_id)
+                fp[prefix + 'poses'] = joints
+                # fp[prefix + 'actions'] = np.full((len(joints),), action_id)
         fp['/parents'] = np.array(PARENTS, dtype=int)
         # fp['/action_names'] = np.array([ord(c) for c in dumps(ACTION_NAMES)],
         #                                dtype='uint8')

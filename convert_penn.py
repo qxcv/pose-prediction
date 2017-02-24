@@ -61,21 +61,12 @@ def load_seq(mat_path):
         return None
     joints /= scale
 
-    # Compute actual data (relative offsets are easier to learn)
-    relpose = np.zeros_like(joints, dtype='float32')
-    relpose[0, 0, :] = 0
-    # Head position records delta from previous frame
-    relpose[1:, 0] = joints[1:, 0] - joints[:-1, 0]
-    # Other joints record delta from parents
-    for jt in range(1, len(PARENTS)):
-        pa = PARENTS[jt]
-        relpose[:, jt] = joints[:, jt] - joints[:, pa]
+    # Need to be T*XY*J
+    joints = joints.transpose((0, 2, 1))
+    assert joints.shape[1] == 2, joints.shape
+    assert joints.shape[0] == x.shape[0], joints.shape
 
-    # move joints to second position
-    relpose = relpose.transpose((0, 2, 1))
-    assert relpose.shape[1] == 2
-
-    return id_str, relpose, mat['action']
+    return id_str, joints, mat['action']
 
 
 if __name__ == '__main__':
@@ -88,11 +79,11 @@ if __name__ == '__main__':
             if rv is None:
                 skipped.append(mat_path)
                 continue
-            id_str, relpose, action = rv
+            id_str, joints, action = rv
             action_id = ACTION_NAMES.index(action)
             prefix = '/seqs/' + id_str + '/'
-            fp[prefix + 'poses'] = relpose
-            fp[prefix + 'actions'] = np.full((len(relpose),), action_id)
+            fp[prefix + 'poses'] = joints
+            fp[prefix + 'actions'] = np.full((len(joints),), action_id)
         fp['/parents'] = np.array(PARENTS, dtype=int)
         fp['/action_names'] = np.array([ord(c) for c in dumps(ACTION_NAMES)],
                                        dtype='uint8')

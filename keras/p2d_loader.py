@@ -152,10 +152,13 @@ def runs(vec):
 
     act_vals = vec[run_starts]
 
+    for start, stop, act in zip(run_starts, run_stops, act_vals):
+        assert np.all(vec[start:stop] == act)
+
     return list(zip(act_vals, run_starts, run_stops))
 
 
-def extract_action_dataset(feats, actions, min_length=5):
+def extract_action_dataset(feats, actions, seq_length, gap):
     """Given pose sequence and action, return pairs of form (pose sequence,
     action label)"""
     # need T*D features (T time, D dimensionality of features)
@@ -163,17 +166,23 @@ def extract_action_dataset(feats, actions, min_length=5):
     # actions should be single array of action numbers
     assert actions.ndim == 1, actions.shape
     pairs = []
-    total_len = 0
+    subseqs  = 0
+    too_short = 0
     all_runs = runs(actions)
     for action, start, stop in all_runs:
         length = stop - start
-        if length < min_length:
+        if length < seq_length:
+            too_short += 1
             continue
-        total_len += length
-        pairs.append((feats[start:stop], action))
+        for sub_start in range(start, stop - seq_length + 1, gap):
+            # no need to temporally downsample; features have already been
+            # temporally downsampled
+            pairs.append((feats[sub_start:sub_start+seq_length], action))
+            subseqs += 1
     if len(pairs) < len(all_runs):
-        print('%i/%i sequences were too short; still got %i frames, though' %
-              (len(all_runs) - len(pairs), len(all_runs), total_len))
+        print('%i seqs too short' % too_short)
+    print('Got %i action subseqs from %i relposes (%i frames each)'
+          % (subseqs, len(feats), seq_length))
     return pairs
 
 
@@ -198,6 +207,10 @@ def load_p2d_data(data_file,
         train_aclass_ds = []
         val_action_blocks = []
         val_aclass_ds = []
+        # gap is smaller for action classification sequences because we have already downsampled
+        # aclass_gap = max(1, int(np.ceil(gap / float(seq_skip))))
+        # aclass_gap = gap
+        aclass_gap = seq_length
     else:
         train_aclass_ds = val_aclass_ds = None
 
@@ -242,7 +255,8 @@ def load_p2d_data(data_file,
                 assert np.all(np.abs(1 - one_hot_acts.sum(axis=1)) < 0.001)
                 assert len(relposes) == len(one_hot_acts)
 
-                aclass_list = extract_action_dataset(relposes, actions)
+                aclass_list = extract_action_dataset(relposes, actions,
+                                                     seq_length, aclass_gap)
                 if vid_name in val_vids:
                     val_aclass_ds.extend(aclass_list)
                 else:
@@ -255,7 +269,7 @@ def load_p2d_data(data_file,
                 if load_actions:
                     sk = seq_skip
                     sl = seq_length
-                    act_block = one_hot_acts[i:i+sk*sl:sk]
+                    act_block = one_hot_acts[i:i + sk * sl:sk]
 
                 if vid_name in val_vids:
                     train_pose_blocks.append(pose_block)
