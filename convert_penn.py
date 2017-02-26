@@ -43,6 +43,7 @@ def load_seq(mat_path):
     id_str, _ = path.basename(mat_path).rsplit('.mat', 1)
 
     mat = loadmat(mat_path, squeeze_me=True)
+    visible = mat['visibility'].astype(bool)
     # 'x', 'y' are T*J arrays. I want to convert to T*J*XY
     x, y = mat['x'], mat['y']
     joints = np.stack([x, y], axis=-1)
@@ -66,7 +67,7 @@ def load_seq(mat_path):
     assert joints.shape[1] == 2, joints.shape
     assert joints.shape[0] == x.shape[0], joints.shape
 
-    return id_str, joints, mat['action']
+    return id_str, joints, mat['action'], visible
 
 
 if __name__ == '__main__':
@@ -79,11 +80,12 @@ if __name__ == '__main__':
             if rv is None:
                 skipped.append(mat_path)
                 continue
-            id_str, joints, action = rv
+            id_str, joints, action, visible = rv
             action_id = ACTION_NAMES.index(action)
             prefix = '/seqs/' + id_str + '/'
             fp[prefix + 'poses'] = joints
             fp[prefix + 'actions'] = np.full((len(joints),), action_id)
+            fp[prefix + 'valid'] = visible
         fp['/parents'] = np.array(PARENTS, dtype=int)
         fp['/action_names'] = np.array([ord(c) for c in dumps(ACTION_NAMES)],
                                        dtype='uint8')

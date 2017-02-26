@@ -4,7 +4,6 @@ import numpy as np
 from scipy import stats, signal
 import json
 import h5py
-from collections import namedtuple
 
 
 def gauss_filter(seq, sigma, filter_width=None):
@@ -65,7 +64,7 @@ def remove_head(poses, parents):
     return new_poses, new_parents
 
 
-def preprocess_sequence(poses, parents, smooth=False, remove_head=False):
+def preprocess_sequence(poses, parents, smooth_sigma=False, remove_head=False):
     """Preprocess a sequence of 2D poses to have more tractable representation.
     `parents` array is used to calculate output entries which are
     parent-relative joint locations. Note that standardisation will have to be
@@ -74,11 +73,11 @@ def preprocess_sequence(poses, parents, smooth=False, remove_head=False):
     assert poses.ndim == 3, poses.shape
     assert poses.shape[1] == 2, poses.shape
 
-    if smooth:
+    if smooth_sigma:
         # Remove high freq noise with reasonably narrow Gaussian. Channel-wise,
         # so can be applied before anything else.
         pflat = poses.reshape((poses.shape[0], np.prod(poses.shape[1:])))
-        psmooth = gauss_filter(pflat, sigma=1)
+        psmooth = gauss_filter(pflat, sigma=smooth_sigma)
         poses = psmooth.reshape(poses.shape)
 
     if remove_head:
@@ -90,18 +89,21 @@ def preprocess_sequence(poses, parents, smooth=False, remove_head=False):
     offset = np.mean(np.mean(poses, axis=2), axis=0).reshape((1, 2, 1))
     norm_poses = (poses - offset) / scale
 
-    # Compute actual data (relative offsets are easier to learn)
-    relpose = np.zeros_like(norm_poses)
-    relpose[0, 0, :] = 0
-    # Head position records delta from previous frame
-    relpose[1:, :, 0] = norm_poses[1:, :, 0] - norm_poses[:-1, :, 0]
-    # Other norm_poses record delta from parents
-    for jt in range(1, len(parents)):
-        pa = parents[jt]
-        relpose[:, :, jt] = norm_poses[:, :, jt] - norm_poses[:, :, pa]
+    if parents is not None:
+        # Compute actual data (relative offsets are easier to learn)
+        relpose = np.zeros_like(norm_poses)
+        relpose[0, 0, :] = 0
+        # Head position records delta from previous frame
+        relpose[1:, :, 0] = norm_poses[1:, :, 0] - norm_poses[:-1, :, 0]
+        # Other norm_poses record delta from parents
+        for jt in range(1, len(parents)):
+            pa = parents[jt]
+            relpose[:, :, jt] = norm_poses[:, :, jt] - norm_poses[:, :, pa]
 
-    # Collapse in last two dimensions, interleaving X and Y coordinates
-    shaped = relpose.reshape((relpose.shape[0], -1))
+        # Collapse in last two dimensions, interleaving X and Y coordinates
+        shaped = relpose.reshape((relpose.shape[0], -1))
+    else:
+        shaped = poses.reshape((norm_poses.shape[0], -1))
 
     return shaped
 
@@ -166,7 +168,7 @@ def extract_action_dataset(feats, actions, seq_length, gap):
     # actions should be single array of action numbers
     assert actions.ndim == 1, actions.shape
     pairs = []
-    subseqs  = 0
+    subseqs = 0
     too_short = 0
     all_runs = runs(actions)
     for action, start, stop in all_runs:
@@ -177,20 +179,9 @@ def extract_action_dataset(feats, actions, seq_length, gap):
         for sub_start in range(start, stop - seq_length + 1, gap):
             # no need to temporally downsample; features have already been
             # temporally downsampled
-            pairs.append((feats[sub_start:sub_start+seq_length], action))
+            pairs.append((feats[sub_start:sub_start + seq_length], action))
             subseqs += 1
-    if len(pairs) < len(all_runs):
-        print('%i seqs too short' % too_short)
-    print('Got %i action subseqs from %i relposes (%i frames each)'
-          % (subseqs, len(feats), seq_length))
     return pairs
-
-
-Data = namedtuple('Data', [
-    'train_poses', 'train_actions', 'val_poses', 'val_actions', 'mean', 'std',
-    'action_names', 'train_vids', 'val_vids', 'data_path', 'parents',
-    'train_aclass_ds', 'val_aclass_ds'
-])
 
 
 def load_p2d_data(data_file,
@@ -199,15 +190,33 @@ def load_p2d_data(data_file,
                   gap=1,
                   val_frac=0.2,
                   add_noise=0.6,
-                  load_actions=True):
+                  load_actions=True,
+                  relative=True):
+    """Preprocess an open HDF5 file which has been formatted to hold 2D poses.
+
+    :param data_file: The open HDF5 file.
+    :param seq_length: Length of output sequences.
+    :param seq_skip: How many (original) frames apart each pose should be in an
+        output sequence.
+    :param gap: How far to skip forward between each sampled sequence.
+    :param val_frac: Percentage of dataset to use as validation data.
+    :param add_noise: Change one-hot action vectors to be distributions which
+        select correct action ``add_noise*100``% of the time (or choose
+        randomly otherwise). Hack to emulate noisy actions.
+    :param load_actions: Should actions actually be returned?
+    :param relative: Whether to use parent-relative parameterisation.
+    :rtype: Dictionary of relevant data."""
     train_pose_blocks = []
     val_pose_blocks = []
+    train_mask_blocks = []
+    val_mask_blocks = []
     if load_actions:
         train_action_blocks = []
         train_aclass_ds = []
         val_action_blocks = []
         val_aclass_ds = []
-        # gap is smaller for action classification sequences because we have already downsampled
+        # gap is smaller for action classification sequences because we have
+        # already downsampled
         # aclass_gap = max(1, int(np.ceil(gap / float(seq_skip))))
         # aclass_gap = gap
         aclass_gap = seq_length
@@ -237,7 +246,9 @@ def load_p2d_data(data_file,
 
         for vid_name in fp['seqs']:
             poses = fp['/seqs/' + vid_name + '/poses'].value
-            relposes = preprocess_sequence(poses, parents, smooth=True)
+            # don't both with relative poses
+            norm_poses = preprocess_sequence(
+                poses, parents if relative else None, smooth_sigma=2)
 
             if load_actions:
                 actions = fp['/seqs/' + vid_name + '/actions'].value
@@ -253,18 +264,25 @@ def load_p2d_data(data_file,
                 one_hot_acts[(range(len(actions)), actions)] += cert
                 # actions should form prob dist., roughly
                 assert np.all(np.abs(1 - one_hot_acts.sum(axis=1)) < 0.001)
-                assert len(relposes) == len(one_hot_acts)
+                assert len(norm_poses) == len(one_hot_acts)
 
-                aclass_list = extract_action_dataset(relposes, actions,
+                aclass_list = extract_action_dataset(norm_poses, actions,
                                                      seq_length, aclass_gap)
                 if vid_name in val_vids:
                     val_aclass_ds.extend(aclass_list)
                 else:
                     train_aclass_ds.extend(aclass_list)
 
-            range_count = len(relposes) - seq_skip * seq_length + 1
+            if '/seqs/' + vid_name + '/valid' in fp:
+                mask = fp['/seqs/' + vid_name + '/valid'].value
+                assert mask.shape == norm_poses.shape
+            else:
+                mask = np.ones_like(norm_poses)
+
+            range_count = len(norm_poses) - seq_skip * seq_length + 1
             for i in range(0, range_count, gap):
-                pose_block = relposes[i:i + seq_skip * seq_length:seq_skip]
+                pose_block = norm_poses[i:i + seq_skip * seq_length:seq_skip]
+                mask_block = mask[i:i + seq_skip * seq_length:seq_skip]
 
                 if load_actions:
                     sk = seq_skip
@@ -275,13 +293,17 @@ def load_p2d_data(data_file,
                     train_pose_blocks.append(pose_block)
                     if load_actions:
                         train_action_blocks.append(act_block)
+                    train_mask_blocks.append(mask_block)
                 else:
                     val_pose_blocks.append(pose_block)
                     if load_actions:
                         val_action_blocks.append(act_block)
+                    val_mask_blocks.append(mask_block)
 
     train_poses = np.stack(train_pose_blocks, axis=0).astype('float32')
+    train_mask = np.stack(train_mask_blocks, axis=0).astype('float32')
     val_poses = np.stack(val_pose_blocks, axis=0).astype('float32')
+    val_mask = np.stack(val_mask_blocks, axis=0).astype('float32')
     if load_actions:
         train_actions = np.stack(train_action_blocks, axis=0).astype('float32')
         val_actions = np.stack(val_action_blocks, axis=0).astype('float32')
@@ -297,8 +319,23 @@ def load_p2d_data(data_file,
     train_poses = (train_poses - mean) / std
     val_poses = (val_poses - mean) / std
 
-    return Data(train_poses, train_actions, val_poses, val_actions, mean, std,
-                action_names,
-                sorted(train_vids),
-                sorted(val_vids), data_file, parents, train_aclass_ds,
-                val_aclass_ds)
+    train_poses[~train_mask] = 0
+    val_poses[~val_mask] = 0
+
+    return {
+        'train_poses': train_poses,
+        'train_mask': train_mask,
+        'train_actions': train_actions,
+        'val_poses': val_poses,
+        'val_mask': val_mask,
+        'val_actions': val_actions,
+        'mean': mean,
+        'std': std,
+        'action_names': action_names,
+        'train_vids': sorted(train_vids),
+        'val_vids': sorted(val_vids),
+        'data_path': data_file,
+        'parents': parents,
+        'train_aclass_ds': train_aclass_ds,
+        'val_aclass_ds': val_aclass_ds
+    }
