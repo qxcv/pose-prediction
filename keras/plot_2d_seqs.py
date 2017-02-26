@@ -5,6 +5,7 @@ import argparse
 import matplotlib.pyplot as plt
 from matplotlib import animation as anim
 import numpy as np
+from concurrent.futures import ThreadPoolExecutor
 
 
 def draw_poses(title, parents, pose_sequence):
@@ -27,6 +28,7 @@ def draw_poses(title, parents, pose_sequence):
         xmax, ymax = sp_joints.max(axis=0).max(axis=1)
         ax.set_xlim(xmin, xmax)
         ax.set_ylim(ymin, ymax)
+        ax.set_aspect('equal')
         ax.invert_yaxis()
 
         for joint in range(1, len(parents)):
@@ -70,6 +72,13 @@ def draw_poses(title, parents, pose_sequence):
         blit=True)
 
 
+def video_worker(ks):
+    key, seq = ks
+    print('Working on', key)
+    seq.save(key + '.mp4', writer='avconv', fps=50 / 3.0)
+    return key
+
+
 parser = argparse.ArgumentParser()
 parser.add_argument(
     'pose_path', help='path to .npz for poses')
@@ -96,9 +105,11 @@ if __name__ == '__main__':
     if args.video:
         # save video
         print('Saving videos')
-        for key, seq in anims:
-            print('Working on', key)
-            seq.save(key + '.mp4', writer='ffmpeg', fps=50 / 3.0)
+        with ThreadPoolExecutor() as p:
+            # need thread pool because animations can't be picked for a
+            # multiprocess pool :(
+            for key in p.map(video_worker, anims):
+                print('%s done' % key)
     else:
         print('Showing sequences')
         plt.show()
