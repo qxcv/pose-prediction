@@ -191,6 +191,7 @@ def load_p2d_data(data_file,
                   val_frac=0.2,
                   add_noise=0.6,
                   load_actions=True,
+                  completion_length=None,
                   relative=True):
     """Preprocess an open HDF5 file which has been formatted to hold 2D poses.
 
@@ -204,6 +205,8 @@ def load_p2d_data(data_file,
         select correct action ``add_noise*100``% of the time (or choose
         randomly otherwise). Hack to emulate noisy actions.
     :param load_actions: Should actions actually be returned?
+    :param completino_length: Number of sequential poses to use in completion
+        problems. Set to None to disable.
     :param relative: Whether to use parent-relative parameterisation.
     :rtype: Dictionary of relevant data."""
     train_pose_blocks = []
@@ -222,6 +225,8 @@ def load_p2d_data(data_file,
         aclass_gap = seq_length
     else:
         train_aclass_ds = val_aclass_ds = None
+    if completion_length:
+        train_completions = val_completions = None
 
     # for deterministic val set split
     srng = np.random.RandomState(seed=8904511)
@@ -306,6 +311,32 @@ def load_p2d_data(data_file,
                         val_action_blocks.append(act_block)
                     val_mask_blocks.append(mask_block)
 
+            if completion_length:
+                # choose non-overlapping seqeuences for completion dataset
+                range_bound = 1 + len(norm_poses) \
+                              - seq_skip * completion_length + 1
+                for i in range(0, range_bound, seq_skip):
+                    endpoint = i + seq_skip * completion_length
+                    pose_block = norm_poses[i:endpoint:seq_skip]
+                    mask_block = mask[i:endpoint:seq_skip]
+                    assert pose_block.shape == mask_block.shape, \
+                        'poses %s, mask %s' % (pose_block.shape,
+                                               mask_block.shape)
+                    assert len(pose_block) == completion_length, \
+                        pose_block.shape
+                    completion_block = {
+                        'poses': pose_block,
+                        'mask': mask_block,
+                        'vid_name': vid_name,
+                        'start': i,
+                        'stop': endpoint,
+                        'skip': seq_skip
+                    }
+                    if vid_name in val_vids:
+                        val_completions.append(completion_block)
+                    else:
+                        train_completions.append(completion_block)
+
     if missing_mask:
         print('Some masks found missing by loader; assuming unmasked')
     else:
@@ -335,6 +366,11 @@ def load_p2d_data(data_file,
         for f, _ in action_ds:
             # TODO: what else to do here? Should I save masks and remove those?
             f[:] = (f - mean) / std
+    for completion_ds in [train_completions, val_completions]:
+        for comp_dict in completion_ds:
+            poses = comp_dict['poses']
+            f[:] = (f - mean) / std
+            f[comp_dict['mask'] == 0] = 0
 
     return {
         'train_poses': train_poses,
@@ -351,5 +387,7 @@ def load_p2d_data(data_file,
         'data_path': data_file,
         'parents': parents,
         'train_aclass_ds': train_aclass_ds,
-        'val_aclass_ds': val_aclass_ds
+        'val_aclass_ds': val_aclass_ds,
+        'train_completions': train_completions,
+        'val_completions': val_completions
     }
