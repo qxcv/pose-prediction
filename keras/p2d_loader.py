@@ -244,6 +244,8 @@ def load_p2d_data(data_file,
         val_vids = set(val_vid_list[:val_count])
         train_vids = set(val_vid_list) - val_vids
 
+        missing_mask = False
+
         for vid_name in fp['seqs']:
             poses = fp['/seqs/' + vid_name + '/poses'].value
             # don't both with relative poses
@@ -275,8 +277,12 @@ def load_p2d_data(data_file,
 
             if '/seqs/' + vid_name + '/valid' in fp:
                 mask = fp['/seqs/' + vid_name + '/valid'].value
-                assert mask.shape == norm_poses.shape
+                mask = mask.reshape((mask.shape[0], -1))
+                assert mask.shape == norm_poses.shape, \
+                    "mask should be %s, but was %s" % (norm_poses.shape,
+                                                       mask.shape)
             else:
+                missing_mask = True
                 mask = np.ones_like(norm_poses)
 
             range_count = len(norm_poses) - seq_skip * seq_length + 1
@@ -300,6 +306,11 @@ def load_p2d_data(data_file,
                         val_action_blocks.append(act_block)
                     val_mask_blocks.append(mask_block)
 
+    if missing_mask:
+        print('Some masks found missing by loader; assuming unmasked')
+    else:
+        print('Loader using true masks from file')
+
     train_poses = np.stack(train_pose_blocks, axis=0).astype('float32')
     train_mask = np.stack(train_mask_blocks, axis=0).astype('float32')
     val_poses = np.stack(val_pose_blocks, axis=0).astype('float32')
@@ -318,9 +329,12 @@ def load_p2d_data(data_file,
     std[std < 1e-5] = 1
     train_poses = (train_poses - mean) / std
     val_poses = (val_poses - mean) / std
-
-    train_poses[~train_mask] = 0
-    val_poses[~val_mask] = 0
+    train_poses[train_mask == 0] = 0
+    val_poses[val_mask == 0] = 0
+    for action_ds in [train_aclass_ds, val_aclass_ds]:
+        for f, _ in action_ds:
+            # TODO: what else to do here? Should I save masks and remove those?
+            f[:] = (f - mean) / std
 
     return {
         'train_poses': train_poses,

@@ -43,7 +43,7 @@ def load_seq(mat_path):
     id_str, _ = path.basename(mat_path).rsplit('.mat', 1)
 
     mat = loadmat(mat_path, squeeze_me=True)
-    visible = mat['visibility'].astype(bool)
+
     # 'x', 'y' are T*J arrays. I want to convert to T*J*XY
     x, y = mat['x'], mat['y']
     joints = np.stack([x, y], axis=-1)
@@ -51,12 +51,27 @@ def load_seq(mat_path):
     # normalising
     joints = np.array(joints, dtype=float)
 
+    visible = mat['visibility'].astype(bool)
+    # 'visible' is T*J, we need it to be T*2*J
+    actual_visible = np.tile(visible[..., np.newaxis], (1, 1, 2))
+    assert np.all(actual_visible[:, :, 0] == visible)
+    assert actual_visible.shape == joints.shape, \
+        'expected %s, got %s' % (joints.shape, actual_visible.shape)
+
     # Normalise by median hip-shoulder distance (will invisible joints work?)
     # left shoulder/right hip
+    valid_lr = visible[:, 1] & visible[:, 8]
     hsd_lr = np.linalg.norm(joints[:, 1] - joints[:, 8], axis=1)
+    hsd_lr = hsd_lr[valid_lr]
     # right shoulder/left hip
+    valid_rl = visible[:, 2] & visible[:, 7]
     hsd_rl = np.linalg.norm(joints[:, 2] - joints[:, 7], axis=1)
-    scale = np.median(np.concatenate((hsd_lr, hsd_rl)))
+    hsd_rl = hsd_rl[valid_rl]
+    hsd_cat = np.concatenate((hsd_lr, hsd_rl))
+    if hsd_cat.size == 0:
+        # can't actually calculate a scale
+        return None
+    scale = np.median(hsd_cat)
     # Make sure that scale is sane
     if abs(scale) < 40 or abs(scale) > 400:
         return None
@@ -67,7 +82,7 @@ def load_seq(mat_path):
     assert joints.shape[1] == 2, joints.shape
     assert joints.shape[0] == x.shape[0], joints.shape
 
-    return id_str, joints, mat['action'], visible
+    return id_str, joints, mat['action'], actual_visible
 
 
 if __name__ == '__main__':

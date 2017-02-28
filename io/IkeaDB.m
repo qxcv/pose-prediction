@@ -31,6 +31,7 @@ classdef IkeaDB < handle
         act_names
         vid_clip_ids
         internal_to_gopro_num
+        pose_root
     end
     
     methods
@@ -38,6 +39,7 @@ classdef IkeaDB < handle
             if nargin == 0
                 root = './IkeaDataset';
             end
+            obj.pose_root = './poses';
             obj.root = root;
             % Load clip database itself
             obj.data = loadout(fullfile(root, 'IkeaClipsDB_withactions.mat'), 'IkeaDB');
@@ -142,7 +144,7 @@ classdef IkeaDB < handle
             obj.vid_clip_ids = zeros([1, nclips]);
             for i=vid_ids
                 fn = sprintf('pose_clip_%i.mat', i);
-                path = fullfile(obj.root, 'tmp2', fn);
+                path = fullfile(obj.pose_root, fn);
                 obj.poses{i} = loadout(path, 'pose');
             end
         end
