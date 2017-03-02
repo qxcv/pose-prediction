@@ -226,6 +226,9 @@ def load_p2d_data(data_file,
     else:
         train_aclass_ds = val_aclass_ds = None
     if completion_length:
+        train_completions = []
+        val_completions = []
+    else:
         train_completions = val_completions = None
 
     # for deterministic val set split
@@ -315,7 +318,8 @@ def load_p2d_data(data_file,
                 # choose non-overlapping seqeuences for completion dataset
                 range_bound = 1 + len(norm_poses) \
                               - seq_skip * completion_length + 1
-                for i in range(0, range_bound, seq_skip):
+                block_skip = seq_skip * completion_length
+                for i in range(0, range_bound, block_skip):
                     endpoint = i + seq_skip * completion_length
                     pose_block = norm_poses[i:endpoint:seq_skip]
                     mask_block = mask[i:endpoint:seq_skip]
