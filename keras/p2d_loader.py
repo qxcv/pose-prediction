@@ -46,22 +46,28 @@ def is_toposorted_tree(parents):
     return True
 
 
-def remove_head(poses, parents):
+def head_remover(parents):
     """Removes joint 0 (usually head) from the pose tree. At the moment, it
     requires joint 0 to have only one child (but there's no theoretical reason
     for that; you could just as easily average several children to create a new
-    root). Could also extend to removing arbitrary joints relatively easily."""
+    root). Could also extend to removing arbitrary joints relatively easily.
+
+    Returns the parents array and a transformation matrix to convert poses."""
     assert is_toposorted_tree(parents)
 
+    # TODO: consider support for removing several joints. Will require change
+    # in transition matrix!
     children = [ch for ch, pa in enumerate(parents) if pa == 0 and ch != 0]
     assert children[0] <= 1, "only supports one child at the moment"
 
     new_parents = [p - 1 for p in parents[1:]]
     assert is_toposorted_tree(new_parents)
-    assert poses.ndim == 3, "need poses (shape %s) to be T,XY,J" % poses.shape
-    new_poses = poses[:, :, 1:]
 
-    return new_poses, new_parents
+    transition = np.concatenate((np.zeros((len(new_parents), 1)),
+                                 np.eye(len(new_parents))), axis=1)
+    assert transition.shape == (len(new_parents), len(parents))
+
+    return transition, new_parents
 
 
 def preprocess_sequence(poses, parents, smooth_sigma=False, remove_head=False):
@@ -81,7 +87,12 @@ def preprocess_sequence(poses, parents, smooth_sigma=False, remove_head=False):
         poses = psmooth.reshape(poses.shape)
 
     if remove_head:
-        poses, parents = remove_head(poses, parents)
+        hrm_mat, parents = head_remover(parents)
+        hrm_reshape = hrm_mat.reshape((1, 1) + hrm_mat.shape)
+        assert hrm_reshape.ndim == 4
+        removed_poses = np.dot(hrm_reshape, poses)
+        assert removed_poses.shape == poses.shape[:2] + (len(parents),)
+        poses = removed_poses
 
     # Scale so that person roughly fits in 1x1 box at origin
     scale = (np.max(poses, axis=2) - np.min(poses, axis=2)).flatten().std()
@@ -192,7 +203,8 @@ def load_p2d_data(data_file,
                   add_noise=0.6,
                   load_actions=True,
                   completion_length=None,
-                  relative=True):
+                  relative=True,
+                  remove_head=False):
     """Preprocess an open HDF5 file which has been formatted to hold 2D poses.
 
     :param data_file: The open HDF5 file.
@@ -208,6 +220,7 @@ def load_p2d_data(data_file,
     :param completino_length: Number of sequential poses to use in completion
         problems. Set to None to disable.
     :param relative: Whether to use parent-relative parameterisation.
+    :param remove_head: Whether to remove head joint.
     :rtype: Dictionary of relevant data."""
     train_pose_blocks = []
     val_pose_blocks = []
@@ -234,6 +247,9 @@ def load_p2d_data(data_file,
     with h5py.File(data_file, 'r') as fp:
         parents = fp['/parents'].value
 
+        if remove_head:
+            _, parents = head_remover(parents)
+
         if load_actions:
             num_actions = fp['/num_actions'].value.flatten()[0]
             action_json_string = fp['/action_names'].value.tostring().decode(
@@ -255,7 +271,8 @@ def load_p2d_data(data_file,
             poses = fp['/seqs/' + vid_name + '/poses'].value
             # don't both with relative poses
             norm_poses = preprocess_sequence(
-                poses, parents if relative else None, smooth_sigma=2)
+                poses, parents if relative else None, smooth_sigma=2,
+                remove_head=remove_head)
 
             if load_actions:
                 actions = fp['/seqs/' + vid_name + '/actions'].value
