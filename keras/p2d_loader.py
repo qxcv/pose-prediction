@@ -60,7 +60,7 @@ def head_remover(parents):
     children = [ch for ch, pa in enumerate(parents) if pa == 0 and ch != 0]
     assert children[0] <= 1, "only supports one child at the moment"
 
-    new_parents = [p - 1 for p in parents[1:]]
+    new_parents = [p - 1 if p != 0 else 0 for p in parents[1:]]
     assert is_toposorted_tree(new_parents)
 
     transition = np.concatenate((np.zeros((len(new_parents), 1)),
@@ -70,7 +70,7 @@ def head_remover(parents):
     return transition, new_parents
 
 
-def preprocess_sequence(poses, parents, smooth_sigma=False, remove_head=False):
+def preprocess_sequence(poses, parents, smooth_sigma=False, hrm_mat=None):
     """Preprocess a sequence of 2D poses to have more tractable representation.
     `parents` array is used to calculate output entries which are
     parent-relative joint locations. Note that standardisation will have to be
@@ -86,11 +86,12 @@ def preprocess_sequence(poses, parents, smooth_sigma=False, remove_head=False):
         psmooth = gauss_filter(pflat, sigma=smooth_sigma)
         poses = psmooth.reshape(poses.shape)
 
-    if remove_head:
-        hrm_mat, parents = head_remover(parents)
-        hrm_reshape = hrm_mat.reshape((1, 1) + hrm_mat.shape)
-        assert hrm_reshape.ndim == 4
-        removed_poses = np.dot(hrm_reshape, poses)
+    if hrm_mat is not None:
+        assert hrm_mat.ndim == 2
+        # poses is T*(XY)*J, and hrm_mat is J'*J. We want to get back a
+        # T*(XY)*J' array (i.e. go down the vectors in the last dimension and
+        # multiply by them).
+        removed_poses = np.einsum('kl,ijl->ijk', hrm_mat, poses)
         assert removed_poses.shape == poses.shape[:2] + (len(parents),)
         poses = removed_poses
 
@@ -251,7 +252,9 @@ def load_p2d_data(data_file,
         parents = fp['/parents'].value
 
         if remove_head:
-            _, parents = head_remover(parents)
+            hrm_mat, parents = head_remover(parents)
+        else:
+            hrm_mat = None
 
         if load_actions:
             num_actions = fp['/num_actions'].value.flatten()[0]
@@ -275,7 +278,7 @@ def load_p2d_data(data_file,
             # don't both with relative poses
             norm_poses = preprocess_sequence(
                 poses, parents if relative else None, smooth_sigma=2,
-                remove_head=remove_head)
+                hrm_mat=hrm_mat)
 
             if load_actions:
                 actions = fp['/seqs/' + vid_name + '/actions'].value
@@ -390,8 +393,8 @@ def load_p2d_data(data_file,
     for completion_ds in [train_completions, val_completions]:
         for comp_dict in completion_ds:
             poses = comp_dict['poses']
-            f[:] = (f - mean) / std
-            f[comp_dict['mask'] == 0] = 0
+            poses[:] = (poses - mean) / std
+            poses[comp_dict['mask'] == 0] = 0
 
     return {
         'train_poses': train_poses,
