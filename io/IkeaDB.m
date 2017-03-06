@@ -12,7 +12,10 @@ classdef IkeaDB < handle
     %   recognition network. Scripts to produce this are currently somewhat
     %   ad-hoc, since they depend on a trained network in Anoop's home dir
     %   (which has to be converted to work with Keras, etc.).
-    
+        
+    % Joint names (PC): head (1), base of neck (2), right shoulder (3), right
+    % elbow (4), right wrist (5), left shoulder (6), left elbow (7), left wrist
+    % (8)
     properties(Constant)
         % Parents array
         PA = [1 1 2 3 4 2 6 7];
