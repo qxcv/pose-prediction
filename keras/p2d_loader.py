@@ -218,7 +218,7 @@ def load_p2d_data(data_file,
         select correct action ``add_noise*100``% of the time (or choose
         randomly otherwise). Hack to emulate noisy actions.
     :param load_actions: Should actions actually be returned?
-    :param completino_length: Number of sequential poses to use in completion
+    :param completion_length: Number of sequential poses to use in completion
         problems. Set to None to disable.
     :param relative: Whether to use parent-relative parameterisation.
     :param remove_head: Whether to remove head joint.
@@ -386,15 +386,18 @@ def load_p2d_data(data_file,
     val_poses = (val_poses - mean) / std
     train_poses[train_mask == 0] = 0
     val_poses[val_mask == 0] = 0
-    for action_ds in [train_aclass_ds, val_aclass_ds]:
-        for f, _ in action_ds:
-            # TODO: what else to do here? Should I save masks and remove those?
-            f[:] = (f - mean) / std
-    for completion_ds in [train_completions, val_completions]:
-        for comp_dict in completion_ds:
-            poses = comp_dict['poses']
-            poses[:] = (poses - mean) / std
-            poses[comp_dict['mask'] == 0] = 0
+    if load_actions:
+        for action_ds in [train_aclass_ds, val_aclass_ds]:
+            for f, _ in action_ds:
+                # TODO: what else to do here? Should I save masks and remove
+                # those?
+                f[:] = (f - mean) / std
+    if completion_length:
+        for completion_ds in [train_completions, val_completions]:
+            for comp_dict in completion_ds:
+                poses = comp_dict['poses']
+                poses[:] = (poses - mean) / std
+                poses[comp_dict['mask'] == 0] = 0
 
     return {
         'train_poses': train_poses,

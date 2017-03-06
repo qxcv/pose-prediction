@@ -6,9 +6,11 @@ import matplotlib.pyplot as plt
 from matplotlib import animation as anim
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor
+from scipy.misc import imread
 
 
-def draw_poses(title, parents, pose_sequence):
+def draw_poses(title, parents, pose_sequence, frame_paths=None,
+               subplot_titles=None):
     N, T, _, J = pose_sequence.shape
     fig = plt.figure()
     fig.suptitle(title)
@@ -18,18 +20,24 @@ def draw_poses(title, parents, pose_sequence):
     rows = int(np.ceil(N / float(cols)))
     subplots = []
     all_lines = []
+    if frame_paths is not None:
+        image_handles = []
     for spi in range(N):
         ax = fig.add_subplot(rows, cols, spi + 1)
         subplots.append(ax)
 
         sp_lines = []
         sp_joints = pose_sequence[spi]
-        xmin, ymin = sp_joints.min(axis=0).min(axis=1)
-        xmax, ymax = sp_joints.max(axis=0).max(axis=1)
-        ax.set_xlim(xmin, xmax)
-        ax.set_ylim(ymin, ymax)
-        ax.set_aspect('equal')
-        ax.invert_yaxis()
+        if frame_paths is None:
+            xmin, ymin = sp_joints.min(axis=0).min(axis=1)
+            xmax, ymax = sp_joints.max(axis=0).max(axis=1)
+            ax.set_xlim(xmin, xmax)
+            ax.set_ylim(ymin, ymax)
+            ax.set_aspect('equal')
+            ax.invert_yaxis()
+        else:
+            im = imread(frame_paths[spi][0])
+            image_handles.append(ax.imshow(im))
 
         for joint in range(1, len(parents)):
             joint_coord = sp_joints[0, :, joint]
@@ -39,6 +47,9 @@ def draw_poses(title, parents, pose_sequence):
             y_data = (parent_coord[1], joint_coord[1])
             line, = ax.plot(x_data, y_data)
             sp_lines.append(line)
+
+        if subplot_titles is not None:
+            ax.set_title(subplot_titles[spi])
 
         all_lines.append(sp_lines)
 
@@ -50,6 +61,10 @@ def draw_poses(title, parents, pose_sequence):
             lines = all_lines[spi]
             # one line per edge, so no line for the parent
             assert len(parents) == len(lines) + 1
+
+            if frame_paths is not None:
+                im = imread(frame_paths[spi][frame])
+                image_handles[spi].set_data(im)
 
             for joint in range(1, len(parents)):
                 joint_coord = sp_joints[frame, :, joint]
