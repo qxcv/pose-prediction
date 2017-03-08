@@ -1,15 +1,18 @@
 """Code shared between recurrent and non-recurrent pose prediction models."""
 
 from collections import OrderedDict
+from glob import glob
+import itertools
+from os import path
+import re
+
+import numpy as np
+
+from scipy.stats import norm
 
 from keras import backend as K
 from keras.callbacks import Callback
 from keras.layers import Layer
-import numpy as np
-from scipy.stats import norm
-from glob import glob
-import re
-from os import path
 
 # here because I can't be bothered updating other code to point to h36m_loader
 from h36m_loader import GOOD_MOCAP_INDS, insert_junk_entries  # flake8: noqa

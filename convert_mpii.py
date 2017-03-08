@@ -31,6 +31,9 @@ ACTION_MERGES = {knife_act: 'knife actionV' for knife_act in [
     'cut apartV', 'cut diceV', 'cut off endsV', 'cut out insideV',
     'cut stripesV', 'cutV', 'sliceV', 'chopV'
 ]}
+# XXX: this is broken! Some actions aren't registering, and I can't figure out
+# why. Example: s13-d12-cam-002 is claimed to have no actions except n/a, and
+# yet it clearly includes some take_out actions. Why is this happening?
 ACTION_LIST = [
     'n/a',                # unknown (not in email to Anoop)
     'screw openV',        # 1.  Screw open
@@ -80,11 +83,15 @@ def merge_acts(acts_arr):
     for idx, act in enumerate(acts_arr):
         merged = False
         if act in ACTION_MERGES:
+            # XXX
+            print('Merging %s into %s' % (act, ACTION_MERGES[act]))
             acts_arr[idx] = act = ACTION_MERGES[act]
             merged = True
         if act not in al_set:
             assert not merged, "about to remove merged action (?! why " \
                 "bother with merge if you drop it?)"
+            # XXX
+            print('Replacing %s with n/a' % act)
             acts_arr[idx] = act = 'n/a'
 
     # now check that everything in action list (except n/a action) appears in
@@ -128,7 +135,8 @@ def load_attrs(attr_path):
             vid_name_to_id[vid_name] = idx + 1
 
         # some discrete things are floats rather than ints ;_;
-        fai = lambda p: fp[p].value.flatten().astype(int)
+        def fai(p):
+            return fp[p].value.flatten().astype(int)
         # Subtract 1 to make them zero-based. They still use closed intervals,
         # IIRC.
         start_frames = fai('/annos/startFrame') - 1
@@ -220,7 +228,8 @@ if __name__ == '__main__':
     with File(args.dest, 'w') as fp:
         skipped = []
         with Pool() as p:
-            seq_iter = p.imap(load_seq, ((d, attr_dict) for d in dir_list))
+            # seq_iter = p.imap(load_seq, ((d, attr_dict) for d in dir_list))
+            seq_iter = map(load_seq, ((d, attr_dict) for d in dir_list))
             zipper = zip(dir_list, seq_iter)
             for dir_path, pair in tqdm(zipper, total=len(dir_list)):
                 joints, actions = pair
