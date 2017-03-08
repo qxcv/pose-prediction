@@ -315,12 +315,12 @@ def load_p2d_data(data_file,
 
             range_count = len(norm_poses) - seq_skip * seq_length + 1
             for i in range(0, range_count, gap):
-                pose_block = norm_poses[i:i + seq_skip * seq_length:seq_skip]
-                mask_block = mask[i:i + seq_skip * seq_length:seq_skip]
+                sk = seq_skip
+                sl = seq_length
+                pose_block = norm_poses[i:i + sk * sl:sk]
+                mask_block = mask[i:i + sk * sl:sk]
 
                 if load_actions:
-                    sk = seq_skip
-                    sl = seq_length
                     act_block = one_hot_acts[i:i + sk * sl:sk]
 
                 if vid_name in val_vids:
@@ -337,7 +337,7 @@ def load_p2d_data(data_file,
             if completion_length:
                 # choose non-overlapping seqeuences for completion dataset
                 range_bound = 1 + len(norm_poses) \
-                              - seq_skip * completion_length + 1
+                              - seq_skip * completion_length
                 block_skip = seq_skip * completion_length
                 for i in range(0, range_bound, block_skip):
                     endpoint = i + seq_skip * completion_length
@@ -356,6 +356,10 @@ def load_p2d_data(data_file,
                         'stop': endpoint,
                         'skip': seq_skip
                     }
+                    if load_actions:
+                        action_block = one_hot_acts[i:endpoint:seq_skip]
+                        completion_block['actions'] = action_block
+                        assert len(action_block) == len(pose_block)
                     if vid_name in val_vids:
                         val_completions.append(completion_block)
                     else:
