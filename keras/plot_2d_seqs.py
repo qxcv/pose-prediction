@@ -10,10 +10,17 @@ from scipy.misc import imread
 
 
 def draw_poses(title, parents, pose_sequence, frame_paths=None,
-               subplot_titles=None):
+               subplot_titles=None, fps=50/3.0, crossover=None):
     N, T, _, J = pose_sequence.shape
     fig = plt.figure()
     fig.suptitle(title)
+
+    if frame_paths is not None:
+        frames = {}
+        for subseq_paths in frame_paths:
+            for frame_path in subseq_paths:
+                if frame_path not in frames:
+                    frames[frame_path] = imread(frame_path)
 
     # Arrange plots in a square
     cols = int(np.ceil(np.sqrt(N)))
@@ -36,7 +43,7 @@ def draw_poses(title, parents, pose_sequence, frame_paths=None,
             ax.set_aspect('equal')
             ax.invert_yaxis()
         else:
-            im = imread(frame_paths[spi][0])
+            im = frames[frame_paths[spi][0]]
             image_handles.append(ax.imshow(im))
 
         for joint in range(1, len(parents)):
@@ -63,8 +70,10 @@ def draw_poses(title, parents, pose_sequence, frame_paths=None,
             assert len(parents) == len(lines) + 1
 
             if frame_paths is not None:
-                im = imread(frame_paths[spi][frame])
-                image_handles[spi].set_data(im)
+                im = frames[frame_paths[spi][frame]]
+                handle = image_handles[spi]
+                handle.set_data(im)
+                redrawn.append(handle)
 
             for joint in range(1, len(parents)):
                 joint_coord = sp_joints[frame, :, joint]
@@ -75,6 +84,18 @@ def draw_poses(title, parents, pose_sequence, frame_paths=None,
                 line.set_ydata((parent_coord[1], joint_coord[1]))
                 redrawn.append(line)
 
+            if crossover is not None:
+                if frame >= crossover:
+                    colour = 'blue'
+                else:
+                    colour = 'green'
+                ax = subplots[spi]
+                spines = list(ax.spines.values())
+                for spine in spines:
+                    spine.set_linewidth(6)
+                    spine.set_color(colour)
+                    redrawn.append(spine)
+
         return redrawn
 
     return anim.FuncAnimation(
@@ -83,7 +104,7 @@ def draw_poses(title, parents, pose_sequence, frame_paths=None,
         frames=T,
         repeat=True,
         fargs=(pose_sequence, parents, all_lines),
-        interval=1000 * 3 / 50.0,
+        interval=1000 * (1/fps),
         blit=True)
 
 
