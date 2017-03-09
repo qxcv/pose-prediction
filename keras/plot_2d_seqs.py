@@ -10,7 +10,8 @@ from scipy.misc import imread
 
 
 def draw_poses(title, parents, pose_sequence, frame_paths=None,
-               subplot_titles=None, fps=50/3.0, crossover=None):
+               subplot_titles=None, fps=50/3.0, crossover=None,
+               action_labels=None):
     N, T, _, J = pose_sequence.shape
     fig = plt.figure()
     fig.suptitle(title)
@@ -29,6 +30,8 @@ def draw_poses(title, parents, pose_sequence, frame_paths=None,
     all_lines = []
     if frame_paths is not None:
         image_handles = []
+    if action_labels is not None:
+        label_handles = []
     for spi in range(N):
         ax = fig.add_subplot(rows, cols, spi + 1)
         subplots.append(ax)
@@ -45,6 +48,13 @@ def draw_poses(title, parents, pose_sequence, frame_paths=None,
         else:
             im = frames[frame_paths[spi][0]]
             image_handles.append(ax.imshow(im))
+
+        if action_labels is not None:
+            label = action_labels[0]
+            if not label:
+                label = ''
+            text_h = ax.text(0, 0, label)
+            label_handles.append(text_h)
 
         for joint in range(1, len(parents)):
             joint_coord = sp_joints[0, :, joint]
@@ -83,6 +93,13 @@ def draw_poses(title, parents, pose_sequence, frame_paths=None,
                 line.set_xdata((parent_coord[0], joint_coord[0]))
                 line.set_ydata((parent_coord[1], joint_coord[1]))
                 redrawn.append(line)
+
+            if action_labels is not None:
+                label = action_labels[frame]
+                if not label:
+                    label = ''
+                handle = text_handles[spi]
+                handle.set_text(label)
 
             if crossover is not None:
                 if frame >= crossover:
