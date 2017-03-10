@@ -4,6 +4,7 @@ import numpy as np
 from scipy import stats, signal
 import json
 import h5py
+import pandas as pd
 
 
 def gauss_filter(seq, sigma, filter_width=None):
@@ -63,14 +64,15 @@ def head_remover(parents):
     new_parents = [p - 1 if p != 0 else 0 for p in parents[1:]]
     assert is_toposorted_tree(new_parents)
 
-    transition = np.concatenate((np.zeros((len(new_parents), 1)),
-                                 np.eye(len(new_parents))), axis=1)
+    transition = np.concatenate(
+        (np.zeros((len(new_parents), 1)), np.eye(len(new_parents))), axis=1)
     assert transition.shape == (len(new_parents), len(parents))
 
     return transition, new_parents
 
 
-def preprocess_sequence(poses, parents, smooth_sigma=False, hrm_mat=None):
+def preprocess_sequence(poses, skip, parents, smooth_sigma=False,
+                        hrm_mat=None):
     """Preprocess a sequence of 2D poses to have more tractable representation.
     `parents` array is used to calculate output entries which are
     parent-relative joint locations. Note that standardisation will have to be
@@ -92,7 +94,7 @@ def preprocess_sequence(poses, parents, smooth_sigma=False, hrm_mat=None):
         # T*(XY)*J' array (i.e. go down the vectors in the last dimension and
         # multiply by them).
         removed_poses = np.einsum('kl,ijl->ijk', hrm_mat, poses)
-        assert removed_poses.shape == poses.shape[:2] + (len(parents),)
+        assert removed_poses.shape == poses.shape[:2] + (len(parents), )
         poses = removed_poses
 
     # Scale so that person roughly fits in 1x1 box at origin
@@ -104,9 +106,9 @@ def preprocess_sequence(poses, parents, smooth_sigma=False, hrm_mat=None):
     if parents is not None:
         # Compute actual data (relative offsets are easier to learn)
         relpose = np.zeros_like(norm_poses)
-        relpose[0, 0, :] = 0
-        # Head position records delta from previous frame
-        relpose[1:, :, 0] = norm_poses[1:, :, 0] - norm_poses[:-1, :, 0]
+        # Record delta from frame which is <skip> steps in the past
+        relpose[skip:, :, 0] \
+            = norm_poses[skip:, :, 0] - norm_poses[:-skip, :, 0]
         # Other norm_poses record delta from parents
         for jt in range(1, len(parents)):
             pa = parents[jt]
@@ -117,15 +119,17 @@ def preprocess_sequence(poses, parents, smooth_sigma=False, hrm_mat=None):
     else:
         shaped = poses.reshape((norm_poses.shape[0], -1))
 
-    return shaped
+    return shaped, offset, scale
 
 
-def reconstruct_poses(flat_poses, parents):
+def _reconstruct_poses(flat_poses, parents, pp_offset, pp_scale):
     """Undo parent-relative joint transform. Will not undo the uniform scaling
     applied to each sequence."""
     # shape of poses shold be (num training samples)*(time)*(flattened
     # dimensions)
     assert flat_poses.ndim == 3, flat_poses.shape
+    assert pp_offset.size == 2, 'expect offset to be XY vec'
+    assert np.asarray(pp_scale).size == 1, 'expect scale to be scalar'
 
     # rel_poses is a 4D array: (num samples)*T*(XY)*J
     rel_poses = flat_poses.reshape(flat_poses.shape[:2] + (2, -1))
@@ -146,10 +150,13 @@ def reconstruct_poses(flat_poses, parents):
         offsets = rel_poses[:, :, :, joint]
         true_poses[:, :, :, joint] = parent_pos + offsets
 
+    # add back pp_offset and pp_scale
+    true_poses = true_poses * pp_scale + pp_offset.reshape((1, 1, 2, 1))
+
     return true_poses
 
 
-def runs(vec):
+def _runs(vec):
     vec = np.asarray(vec)
     assert vec.ndim == 1
 
@@ -172,253 +179,316 @@ def runs(vec):
     return list(zip(act_vals, run_starts, run_stops))
 
 
-def extract_action_dataset(feats, actions, seq_length, gap):
-    """Given pose sequence and action, return pairs of form (pose sequence,
-    action label)"""
-    # need T*D features (T time, D dimensionality of features)
-    assert feats.ndim == 2, feats.shape
-    # actions should be single array of action numbers
-    assert actions.ndim == 1, actions.shape
-    pairs = []
-    subseqs = 0
-    too_short = 0
-    all_runs = runs(actions)
-    for action, start, stop in all_runs:
-        length = stop - start
-        if length < seq_length:
-            too_short += 1
-            continue
-        for sub_start in range(start, stop - seq_length + 1, gap):
-            # no need to temporally downsample; features have already been
-            # temporally downsampled
-            pairs.append((feats[sub_start:sub_start + seq_length], action))
-            subseqs += 1
-    return pairs
+class P2DDataset(object):
+    def __init__(self,
+                 data_file_path,
+                 seq_length,
+                 seq_skip,
+                 gap=1,
+                 val_frac=0.2,
+                 have_actions=True,
+                 completion_length=None,
+                 relative=True,
+                 aclass_full_length=128,
+                 aclass_act_length=8,
+                 remove_head=False):
+        """Preprocess an open HDF5 file which has been formatted to hold 2D
+        poses.
 
+        :param data_file: The open HDF5 file.
+        :param seq_length: Length of output sequences.
+        :param seq_skip: How many (original) frames apart each pose should be
+            in an output sequence.
+        :param gap: How far to skip forward between each sampled sequence.
+        :param val_frac: Percentage of dataset to use as validation data.
+        :param have_actions: Should actions actually be returned?
+        :param completion_length: Number of sequential poses to use in
+            completion problems. Set to None to disable.
+        :param relative: Whether to use parent-relative parameterisation.
+        :param aclass_full_length: length of action classification sequences.
+        :param aclass_act_length: how much of sequence actual action must take
+            up in action classification sequence. An action classification
+            sequence will thus consist of aclass_full_length -
+            aclass_act_length poses in sequence (arbitrary actions) followed by
+            aclass_act_length poses of the right action.
+        :param remove_head: Whether to remove head joint."""
+        self.data_file_path = data_file_path
+        self.seq_length = seq_length
+        self.seq_skip = seq_skip
+        self.gap = gap
+        self.val_frac = val_frac
+        self.have_actions = have_actions
+        self.relative = relative
+        self.remove_head = remove_head
+        self.completion_length = completion_length
+        self.aclass_full_length = aclass_full_length
+        self.aclass_act_length = 8
+        videos_list = []
 
-def load_p2d_data(data_file,
-                  seq_length,
-                  seq_skip,
-                  gap=1,
-                  val_frac=0.2,
-                  add_noise=0.6,
-                  load_actions=True,
-                  completion_length=None,
-                  relative=True,
-                  remove_head=False):
-    """Preprocess an open HDF5 file which has been formatted to hold 2D poses.
+        with h5py.File(data_file_path, 'r') as fp:
+            self.parents = fp['/parents'].value
 
-    :param data_file: The open HDF5 file.
-    :param seq_length: Length of output sequences.
-    :param seq_skip: How many (original) frames apart each pose should be in an
-        output sequence.
-    :param gap: How far to skip forward between each sampled sequence.
-    :param val_frac: Percentage of dataset to use as validation data.
-    :param add_noise: Change one-hot action vectors to be distributions which
-        select correct action ``add_noise*100``% of the time (or choose
-        randomly otherwise). Hack to emulate noisy actions.
-    :param load_actions: Should actions actually be returned?
-    :param completion_length: Number of sequential poses to use in completion
-        problems. Set to None to disable.
-    :param relative: Whether to use parent-relative parameterisation.
-    :param remove_head: Whether to remove head joint.
-    :rtype: Dictionary of relevant data."""
-    train_pose_blocks = []
-    val_pose_blocks = []
-    train_mask_blocks = []
-    val_mask_blocks = []
-    if load_actions:
-        train_action_blocks = []
-        train_aclass_ds = []
-        val_action_blocks = []
-        val_aclass_ds = []
-        # gap is smaller for action classification sequences because we have
-        # already downsampled
-        # aclass_gap = max(1, int(np.ceil(gap / float(seq_skip))))
-        # aclass_gap = gap
-        aclass_gap = seq_length
-    else:
-        train_aclass_ds = val_aclass_ds = None
-    if completion_length:
-        train_completions = []
-        val_completions = []
-    else:
-        train_completions = val_completions = None
-
-    # for deterministic val set split
-    srng = np.random.RandomState(seed=8904511)
-
-    with h5py.File(data_file, 'r') as fp:
-        parents = fp['/parents'].value
-
-        if remove_head:
-            hrm_mat, parents = head_remover(parents)
-        else:
-            hrm_mat = None
-
-        if load_actions:
-            num_actions = fp['/num_actions'].value.flatten()[0]
-            action_json_string = fp['/action_names'].value.tostring().decode(
-                'utf8')
-            action_names = ['n/a'] + json.loads(action_json_string)
-        else:
-            action_names = None
-
-        vid_names = list(fp['seqs'])
-        val_vid_list = list(vid_names)
-        srng.shuffle(val_vid_list)
-        val_count = max(1, int(val_frac * len(val_vid_list)))
-        val_vids = set(val_vid_list[:val_count])
-        train_vids = set(val_vid_list) - val_vids
-
-        missing_mask = False
-
-        for vid_name in fp['seqs']:
-            poses = fp['/seqs/' + vid_name + '/poses'].value
-            # don't both with relative poses
-            norm_poses = preprocess_sequence(
-                poses, parents if relative else None, smooth_sigma=2,
-                hrm_mat=hrm_mat)
-
-            if load_actions:
-                actions = fp['/seqs/' + vid_name + '/actions'].value
-                # `cert` chance of choosing correct action directly, `1 - cert`
-                # chance of choosing randomly (maybe gets correct action)
-                if add_noise is not None:
-                    cert = add_noise
-                else:
-                    cert = 1
-                one_hot_acts = (1 - cert) * np.ones(
-                    (len(actions), num_actions + 1)) / (num_actions + 1)
-                # XXX: This is an extremely hacky way of injecting noise :/
-                one_hot_acts[(range(len(actions)), actions)] += cert
-                # actions should form prob dist., roughly
-                assert np.all(np.abs(1 - one_hot_acts.sum(axis=1)) < 0.001)
-                assert len(norm_poses) == len(one_hot_acts)
-
-                aclass_list = extract_action_dataset(norm_poses, actions,
-                                                     seq_length, aclass_gap)
-                if vid_name in val_vids:
-                    val_aclass_ds.extend(aclass_list)
-                else:
-                    train_aclass_ds.extend(aclass_list)
-
-            if '/seqs/' + vid_name + '/valid' in fp:
-                mask = fp['/seqs/' + vid_name + '/valid'].value
-                mask = mask.reshape((mask.shape[0], -1))
-                assert mask.shape == norm_poses.shape, \
-                    "mask should be %s, but was %s" % (norm_poses.shape,
-                                                       mask.shape)
+            if self.remove_head:
+                # head removal matrix
+                hrm_mat, self.parents = head_remover(self.parents)
             else:
-                missing_mask = True
-                mask = np.ones_like(norm_poses)
+                hrm_mat = None
 
-            range_count = len(norm_poses) - seq_skip * seq_length + 1
-            for i in range(0, range_count, gap):
-                sk = seq_skip
-                sl = seq_length
-                pose_block = norm_poses[i:i + sk * sl:sk]
-                mask_block = mask[i:i + sk * sl:sk]
+            if self.have_actions:
+                # Redundancy in action count is because I used to write all
+                # actions *except the null action* to the action file, and
+                # wanted to check that action numbers were correct on this end.
+                # Keeping redundancy just to show where brokenness is.
+                num_real_actions = fp['/num_actions'].value.flatten()[0]
+                action_json_string \
+                    = fp['/action_names'].value.tostring().decode('utf8')
+                self.action_names = json.loads(action_json_string)
+                assert len(self.action_names) == num_real_actions, \
+                    'expected %d actions, got %d (incl. n/a)' \
+                    % (num_real_actions, len(self.action_names))
+                self.num_actions = num_real_actions
+            else:
+                self.action_names = None
 
-                if load_actions:
-                    act_block = one_hot_acts[i:i + sk * sl:sk]
+            vid_names = list(fp['seqs'])
+            self.train_vids, self.val_vids \
+                = self._train_test_split(vid_names, self.val_frac)
 
-                if vid_name in val_vids:
-                    train_pose_blocks.append(pose_block)
-                    if load_actions:
-                        train_action_blocks.append(act_block)
-                    train_mask_blocks.append(mask_block)
+            for vid_name in fp['seqs']:
+                orig_poses = fp['/seqs/' + vid_name + '/poses'].value
+                # don't both with relative poses
+                norm_poses, pp_offset, pp_scale = preprocess_sequence(
+                    orig_poses,
+                    self.seq_skip,
+                    self.parents if self.relative else None,
+                    smooth_sigma=2,
+                    hrm_mat=hrm_mat)
+                norm_poses = norm_poses.astype('float32')
+                # make sure we don't reuse poses in native parameterisation
+                del orig_poses
+
+                if self.have_actions:
+                    actions = fp['/seqs/' + vid_name + '/actions'].value
+                    assert len(actions) == len(norm_poses)
+
+                if '/seqs/' + vid_name + '/valid' in fp:
+                    mask = fp['/seqs/' + vid_name + '/valid'].value
+                    mask = mask.reshape((mask.shape[0], -1)).astype('float32')
+                    assert mask.shape == norm_poses.shape, \
+                        "mask should be %s, but was %s" % (norm_poses.shape,
+                                                           mask.shape)
                 else:
-                    val_pose_blocks.append(pose_block)
-                    if load_actions:
-                        val_action_blocks.append(act_block)
-                    val_mask_blocks.append(mask_block)
+                    mask = np.ones_like(norm_poses, dtype='float32')
 
-            if completion_length:
-                # choose non-overlapping seqeuences for completion dataset
-                range_bound = 1 + len(norm_poses) \
-                              - seq_skip * completion_length
-                block_skip = seq_skip * completion_length
-                for i in range(0, range_bound, block_skip):
-                    endpoint = i + seq_skip * completion_length
-                    pose_block = norm_poses[i:endpoint:seq_skip]
-                    mask_block = mask[i:endpoint:seq_skip]
-                    assert pose_block.shape == mask_block.shape, \
-                        'poses %s, mask %s' % (pose_block.shape,
-                                               mask_block.shape)
-                    assert len(pose_block) == completion_length, \
-                        pose_block.shape
-                    completion_block = {
-                        'poses': pose_block,
-                        'mask': mask_block,
-                        'vid_name': vid_name,
-                        'start': i,
-                        'stop': endpoint,
-                        'skip': seq_skip
-                    }
-                    if load_actions:
-                        action_block = one_hot_acts[i:endpoint:seq_skip]
-                        completion_block['actions'] = action_block
-                        assert len(action_block) == len(pose_block)
-                    if vid_name in val_vids:
-                        val_completions.append(completion_block)
-                    else:
-                        train_completions.append(completion_block)
+                vid_meta = {
+                    'pp_offset': pp_offset,
+                    'pp_scale': pp_scale,
+                    'poses': norm_poses,
+                    'vid_name': vid_name,
+                    'mask': mask,
+                    'is_val': vid_name in self.val_vids
+                }
+                if self.have_actions:
+                    vid_meta['actions'] = actions
 
-    if missing_mask:
-        print('Some masks found missing by loader; assuming unmasked')
-    else:
-        print('Loader using true masks from file')
+                videos_list.append(vid_meta)
 
-    train_poses = np.stack(train_pose_blocks, axis=0).astype('float32')
-    train_mask = np.stack(train_mask_blocks, axis=0).astype('float32')
-    val_poses = np.stack(val_pose_blocks, axis=0).astype('float32')
-    val_mask = np.stack(val_mask_blocks, axis=0).astype('float32')
-    if load_actions:
-        train_actions = np.stack(train_action_blocks, axis=0).astype('float32')
-        val_actions = np.stack(val_action_blocks, axis=0).astype('float32')
-    else:
-        train_actions = val_actions = None
+        self.videos = pd.DataFrame.from_records(videos_list)
 
-    flat_poses = train_poses.reshape((-1, train_poses.shape[-1]))
-    mean = flat_poses.mean(axis=0).reshape((1, 1, -1))
-    std = flat_poses.std(axis=0).reshape((1, 1, -1))
-    # setting low stds to 1 will have effect of making low-variance features
-    # (almost) constant zero
-    std[std < 1e-5] = 1
-    train_poses = (train_poses - mean) / std
-    val_poses = (val_poses - mean) / std
-    train_poses[train_mask == 0] = 0
-    val_poses[val_mask == 0] = 0
-    if load_actions:
-        for action_ds in [train_aclass_ds, val_aclass_ds]:
-            for f, _ in action_ds:
-                # TODO: what else to do here? Should I save masks and remove
-                # those?
-                f[:] = (f - mean) / std
-    if completion_length:
-        for completion_ds in [train_completions, val_completions]:
-            for comp_dict in completion_ds:
-                poses = comp_dict['poses']
-                poses[:] = (poses - mean) / std
-                poses[comp_dict['mask'] == 0] = 0
+        train_vids = self.videos[~self.videos.is_val]
+        flat_poses = np.concatenate(train_vids.poses.as_matrix(), axis=0)
+        assert flat_poses.ndim == 2, flat_poses.shape
+        self.mean = flat_poses.mean(axis=0).reshape((1, -1))
+        self.std = flat_poses.std(axis=0).reshape((1, -1))
+        # setting low std to 1 will have effect of making low-variance features
+        # (almost) constant zero
+        self.std[self.std < 1e-5] = 1
+        for poses, mask in zip(self.videos['poses'], self.videos['mask']):
+            poses[:] = (poses[:] - self.mean) / self.std
+            # TODO: should I leave this in? Does it make things better?
+            poses[mask == 0] = 0
 
-    return {
-        'train_poses': train_poses,
-        'train_mask': train_mask,
-        'train_actions': train_actions,
-        'val_poses': val_poses,
-        'val_mask': val_mask,
-        'val_actions': val_actions,
-        'mean': mean,
-        'std': std,
-        'action_names': action_names,
-        'train_vids': sorted(train_vids),
-        'val_vids': sorted(val_vids),
-        'data_path': data_file,
-        'parents': parents,
-        'train_aclass_ds': train_aclass_ds,
-        'val_aclass_ds': val_aclass_ds,
-        'train_completions': train_completions,
-        'val_completions': val_completions
-    }
+        self.dim_obs = self.mean.size
+
+    @staticmethod
+    def _train_test_split(vid_names, val_frac):
+        # copy list so we can shuffle
+        vid_list = list(vid_names)
+        val_srng = np.random.RandomState(seed=8904511)
+        val_srng.shuffle(vid_list)
+        val_count = max(1, int(val_frac * len(vid_list)))
+        val_vids = set(vid_list[:val_count])
+        train_vids = set(vid_list) - val_vids
+        return train_vids, val_vids
+
+    def get_pose_ds(self, train):
+        # poses should be N*T*D, actions should be N*T*A if they exist
+        # (one-hot), mask should be N*T*D
+        if train:
+            vids = self.videos[~self.videos.is_val]
+        else:
+            vids = self.videos[self.videos.is_val]
+
+        seq_skip = self.seq_skip
+        seq_length = self.seq_length
+        gap = self.gap
+
+        pose_blocks = []
+        mask_blocks = []
+        action_blocks = []
+
+        for vid_idx in vids.index:
+            vid_poses = vids['poses'][vid_idx]
+            vid_mask = vids['mask'][vid_idx]
+            if self.have_actions:
+                vid_actions = vids['actions'][vid_idx]
+                vid_one_hot_acts = np.zeros((len(vid_actions),
+                                             self.num_actions),
+                                            dtype='float32')
+
+            range_count = len(vid_poses) - seq_skip * seq_length + 1
+
+            for i in range(0, range_count, gap):
+                pose_block = vid_poses[i:i + seq_skip * seq_length:seq_skip]
+                pose_blocks.append(pose_block)
+                mask_block = vid_mask[i:i + seq_skip * seq_length:seq_skip]
+                mask_blocks.append(mask_block)
+
+                if self.have_actions:
+                    act_block = vid_one_hot_acts[i:i + seq_skip * seq_length:
+                                                 seq_skip]
+                    action_blocks.append(act_block)
+
+        poses = np.stack(pose_blocks, axis=0)
+        masks = np.stack(mask_blocks, axis=0)
+
+        if self.have_actions:
+            actions = np.stack(action_blocks, axis=0)
+        else:
+            actions = None
+
+        return poses, masks, actions
+
+    def get_aclass_ds(self, train):
+        assert self.have_actions, \
+            "can't make action classification data without actions"
+
+        if train:
+            vids = self.videos[~self.videos.is_val]
+        else:
+            vids = self.videos[self.videos.is_val]
+
+        seq_skip = self.seq_skip
+        full_length = self.aclass_full_length
+        act_length = self.aclass_act_length
+        gap = self.gap
+
+        rv = []
+
+        for vid_idx in vids.index:
+            feats = vids['poses'][vid_idx]
+            actions = vids['actions'][vid_idx]
+
+            # need T*D features (T time, D dimensionality of features)
+            assert feats.ndim == 2, feats.shape
+            # actions should be single array of action numbers
+            assert actions.ndim == 1, actions.shape
+            assert len(feats) == len(actions)
+            offset = (full_length - act_length) * seq_skip
+            all_runs = _runs(actions[offset:])
+            # TODO: check what fraction of these are too short. Per Anoop's
+            # suggestion, it probably makes sense to include a bit of context
+            # beforehand. That means that I don't have to guarantee that the
+            # entire sequence has the same action---just that the last few
+            # frames do.
+            for action, start, stop in all_runs:
+                length = stop - start
+                if length < act_length * seq_skip:
+                    continue
+                stop += offset
+                range_end = stop - (seq_skip * full_length) + 1
+                for sub_start in range(start, range_end, gap):
+                    # no need to temporally downsample; features have already
+                    # been temporally downsampled
+                    these_feats = feats[sub_start:sub_start+full_length*seq_skip:seq_skip]
+                    assert len(these_feats) == full_length
+                    suffix = actions[sub_start:sub_start+full_length*seq_skip:seq_skip][-act_length:]
+                    assert (suffix == action).all(), \
+                        "suffix %s should be all action %d" % (suffix, action)
+                    rv.append((these_feats, action))
+
+        return rv
+
+    def get_completion_ds(self, train):
+        # choose non-overlapping seqeuences for completion dataset
+        if train:
+            vids = self.videos[~self.videos.is_val]
+        else:
+            vids = self.videos[self.videos.is_val]
+
+        seq_skip = self.seq_skip
+        completion_length = self.completion_length
+        assert completion_length > 0
+
+        completions = []
+
+        for vid_idx in vids.index:
+            norm_poses = vids['poses'][vid_idx]
+            mask = vids['mask'][vid_idx]
+            vid_name = vids['vid_name'][vid_idx]
+
+            if self.have_actions:
+                actions = vids['actions'][vid_idx]
+                one_hot_acts = np.zeros((len(norm_poses), self.num_actions),
+                                        dtype='float32')
+                one_hot_acts[(range(len(actions)), actions)] = 1
+
+            range_bound = 1 + len(norm_poses) - seq_skip * completion_length
+            block_skip = seq_skip * completion_length
+
+            for i in range(0, range_bound, block_skip):
+                endpoint = i + seq_skip * completion_length
+                pose_block = norm_poses[i:endpoint:seq_skip]
+                mask_block = mask[i:endpoint:seq_skip]
+                assert pose_block.shape == mask_block.shape, \
+                    'poses %s, mask %s' % (pose_block.shape,
+                                           mask_block.shape)
+                assert len(pose_block) == completion_length, \
+                    pose_block.shape
+                completion_block = {
+                    'poses': pose_block,
+                    'mask': mask_block,
+                    'vid_name': vid_name,
+                    'start': i,
+                    'stop': endpoint,
+                    'skip': seq_skip,
+                }
+                if self.have_actions:
+                    action_block = one_hot_acts[i:endpoint:seq_skip]
+                    completion_block['actions'] = action_block
+                    assert len(action_block) == len(pose_block)
+                completions.append(completion_block)
+
+        return completions
+
+    def reconstruct_poses(self, rel_block, vid_name):
+        assert rel_block.ndim == 3 \
+            and rel_block.shape[-1] == 2 * len(self.parents), \
+            rel_block.shape
+
+        # 1) Account for self.std, self.mean
+        rel_block = rel_block * self.std[None, ...] \
+            + self.mean[None, ...]
+
+        # 2) Undo preprocess_sequence (except for head thing, which was a
+        #    one-way trip)
+        vid_idx = np.argwhere(self.videos['vid_name'] == vid_name)
+        pp_offset = self.videos['pp_offset'][vid_idx]
+        pp_scale = self.videos['pp_scale'][vid_idx]
+        block = _reconstruct_poses(rel_block, self.parents, pp_offset,
+                                   pp_scale)
+
+        assert block.shape == rel_block.shape[:2] + (2, len(self.parents)), \
+            block.shape
+
+        return block

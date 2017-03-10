@@ -12,7 +12,7 @@ classdef IkeaDB < handle
     %   recognition network. Scripts to produce this are currently somewhat
     %   ad-hoc, since they depend on a trained network in Anoop's home dir
     %   (which has to be converted to work with Keras, etc.).
-        
+
     % Joint names (PC): head (1), base of neck (2), right shoulder (3), right
     % elbow (4), right wrist (5), left shoulder (6), left elbow (7), left wrist
     % (8)
@@ -30,7 +30,6 @@ classdef IkeaDB < handle
         is_val
         has_anno
         subj_ids
-        act_data
         act_names
         vid_clip_ids
         internal_to_gopro_num
@@ -45,60 +44,30 @@ classdef IkeaDB < handle
             obj.pose_root = './poses';
             obj.root = root;
             % Load clip database itself
-            obj.data = loadout(fullfile(root, 'IkeaClipsDB_withactions.mat'), 'IkeaDB');
+            obj.data = loadout(...
+                fullfile(root, 'IkeaClipsDB_withactions.mat'), ...
+                'IkeaDB');
             
             obj.load_poses();
             obj.map_gopro_ids();
             obj.mark_train_test();
             obj.load_true_acts();
-            obj.load_approx_acts();
+            % obj.load_approx_acts();
         end
         
-        function [starts, ends, actions] = seqactions(obj, video_id)
-            gopro_id = obj.internal_to_gopro_num(video_id);
-            vid_name = sprintf('IkeaDataset\\GOPR%04d.MP4', gopro_id);
-            all_names = [obj.act_data.video_path];
-            act_mask = strcmp(all_names, vid_name);
-            act_subset = obj.act_data(act_mask);
-            [~, sorted_inds] = sort([act_subset.start_index]);
-            act_subset = act_subset(sorted_inds);
-            
-            % 'starts', 'ends' and 'actions' will be integer vectors.
-            starts = [act_subset.start_index];
-            ends = [act_subset.end_index];
-            actions = [act_subset.action_id];
+        function actions = seqactions_tmp2_id(obj, tmp2_id)
+            video_id = find([obj.data.video_id] == tmp2_id);
+            assert(numel(video_id) == 1);
+            actions = obj.data(video_id).activity_id;
         end
         
         function info = seqinfo(obj, datum_id)
             dbi = obj.data(datum_id);
-            start = obj.pframe(dbi.frame_start);
-            finish = obj.pframe(dbi.frame_end);
-            offsets = nan([1 5]);
-            pose_end = finish;
-            for i=1:5
-                pf = obj.pframe(dbi.(sprintf('predict_frame_%i', i)));
-                offsets(i) = 1 - start + pf;
-                pose_end = max([finish pf]);
-            end
-            ntrain = finish - start + 1;
             % Only grab relevant joints (rest are not reliable)
             good_joints = 1:8;
-            seq_poses = obj.poses{dbi.video_id}(good_joints, :, start:pose_end);
-            % XXX: Shouldn't perform this smoothing here :P
-            seq_poses = smooth_poses(seq_poses);
-            test_poses = dbi.annot_test_poses;
-            if ~isempty(test_poses)
-                test_poses = test_poses(good_joints, :, :);
-            end
-            info = struct('anno', dbi, 'poses', seq_poses, ...
-                'offsets', offsets, 'ntrain', ntrain, ...
-                'njoints', size(seq_poses, 1), ...
-                'test_poses', test_poses);
-            
-            if obj.is_test(datum_id) && isempty(info.test_poses)
-                warning('pp:NoTestAnno', 'No true pose for datum %i', ...
-                    datum_id);
-            end
+            seq_poses = obj.poses{dbi.video_id}(good_joints, :, :);
+            info = struct('anno', dbi, 'poses', seq_poses, 'njoints', ...
+                size(seq_poses, 1));
         end
         
 %         function video_poses(obj, video_num)
@@ -195,33 +164,45 @@ classdef IkeaDB < handle
 
         function load_true_acts(obj)
             % Load action annotations.
-            obj.act_data = loadout(fullfile(obj.root, 'ActionAnnotations', ...
-                'activity_Ikea'), 'activity_Ikea');
-            obj.act_names = unique([obj.act_data.action_label]);
-            for i=1:length(obj.act_data)
-                action_name = obj.act_data(i).action_label;
-                action_id = find(strcmp(obj.act_names, action_name));
-                assert(length(action_id) == 1);
-                obj.act_data(i).action_id = action_id;
+            all_acts = {};
+            for i=1:length(obj.data)
+                ids = obj.data(i).activity_id;
+                names = obj.data(i).activity_labels;
+                assert(length(ids) == length(names));
+                for j=1:length(ids)
+                    id = ids(j);
+                    if id == 0
+                        continue
+                    end
+                    name = names{j};
+                    if length(all_acts) >= id && ~isempty(all_acts{id})
+                        assert(strcmp(all_acts{id}, name));
+                    elseif isempty(name)
+                        all_acts{id} = 'n/a'; %#ok<AGROW>
+                    else
+                        all_acts{id} = name; %#ok<AGROW>
+                    end
+                end
             end
+            obj.act_names = all_acts;
         end
-        
-        function load_approx_acts(obj)
-            % attempt to load approximate 
-            act_path = './ikea_estimated_actions.h5';
-            if ~exist(act_path, 'file')
-                warning('pp:NoEstimatedActions', ...
-                    'Could not find estimated actions at %s, skipping', ...
-                    act_path);
-                return
-            end
-            
-            id_map = containers.Map('KeyType', 'char', 'ValueType', 'char');
-            % TODO: finish this method
-            for datidx=1:length(obj.data)
-                continue
-                % gopro_id = obj.internal_to_gopro_num(datidx);
-            end
-        end
+
+%         function load_approx_acts(obj)
+%             % attempt to load approximate actions
+%             act_path = './ikea_estimated_actions.h5';
+%             if ~exist(act_path, 'file')
+%                 warning('pp:NoEstimatedActions', ...
+%                     'Could not find estimated actions at %s, skipping', ...
+%                     act_path);
+%                 return
+%             end
+%             
+%             id_map = containers.Map('KeyType', 'char', 'ValueType', 'char');
+%             % TODO: finish this method
+%             for datidx=1:length(obj.data)
+%                 continue
+%                 % gopro_id = obj.internal_to_gopro_num(datidx);
+%             end
+%         end
     end
 end
