@@ -17,11 +17,18 @@ def draw_poses(title, parents, pose_sequence, frame_paths=None,
     fig.suptitle(title)
 
     if frame_paths is not None:
-        frames = {}
-        for subseq_paths in frame_paths:
-            for frame_path in subseq_paths:
-                if frame_path not in frames:
-                    frames[frame_path] = imread(frame_path)
+        lazy = any(len(f) > 100 for f in frame_paths)
+        if lazy:
+            print('Lazy-loading image sequence')
+            get_frame = imread
+        else:
+            print('Eager-loading image sequence')
+            frames = {}
+            for subseq_paths in frame_paths:
+                for frame_path in subseq_paths:
+                    if frame_path not in frames:
+                        frames[frame_path] = imread(frame_path)
+            get_frame = lambda frame_path: frames[frame_path]
 
     # Arrange plots in a square
     cols = int(np.ceil(np.sqrt(N)))
@@ -46,14 +53,14 @@ def draw_poses(title, parents, pose_sequence, frame_paths=None,
             ax.set_aspect('equal')
             ax.invert_yaxis()
         else:
-            im = frames[frame_paths[spi][0]]
+            im = get_frame(frame_paths[spi][0])
             image_handles.append(ax.imshow(im))
 
         if action_labels is not None:
             label = action_labels[0]
             if not label:
                 label = ''
-            text_h = ax.text(0, 0, label)
+            text_h = ax.text(0, -10, 'Action: ' + label)
             label_handles.append(text_h)
 
         for joint in range(1, len(parents)):
@@ -80,7 +87,7 @@ def draw_poses(title, parents, pose_sequence, frame_paths=None,
             assert len(parents) == len(lines) + 1
 
             if frame_paths is not None:
-                im = frames[frame_paths[spi][frame]]
+                im = get_frame(frame_paths[spi][frame])
                 handle = image_handles[spi]
                 handle.set_data(im)
                 redrawn.append(handle)
@@ -98,8 +105,11 @@ def draw_poses(title, parents, pose_sequence, frame_paths=None,
                 label = action_labels[frame]
                 if not label:
                     label = ''
-                handle = text_handles[spi]
-                handle.set_text(label)
+                handle = label_handles[spi]
+                new_text = 'Action: ' + label
+                if handle.get_text() != new_text:
+                    handle.set_text(new_text)
+                    redrawn.append(handle)
 
             if crossover is not None:
                 if frame >= crossover:
@@ -122,7 +132,7 @@ def draw_poses(title, parents, pose_sequence, frame_paths=None,
         repeat=True,
         fargs=(pose_sequence, parents, all_lines),
         interval=1000 * (1/fps),
-        blit=True)
+        blit=False)
 
 
 def video_worker(ks):
