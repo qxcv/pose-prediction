@@ -227,7 +227,9 @@ if __name__ == '__main__':
 
     with File(args.dest, 'w') as fp:
         skipped = []
+        raise RuntimeError('This is all totally broken. Fix it before you do anything else.')
         with Pool() as p:
+            # XXX: reinstate pool
             # seq_iter = p.imap(load_seq, ((d, attr_dict) for d in dir_list))
             seq_iter = map(load_seq, ((d, attr_dict) for d in dir_list))
             zipper = zip(dir_list, seq_iter)
