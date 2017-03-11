@@ -119,29 +119,27 @@ def merge_acts(acts_arr):
     return acts_arr
 
 
-def acts_to_one_hot(start_frames, end_frames, acts_by_time, all_acts,
+def acts_to_cat_vec(start_frames, end_frames, acts_by_time, all_acts,
                     num_frames):
-    """Turn action names, start times and end times into a series of one-hot
-    action vectors. Resolves conflicts (two actions happening at the same time)
-    in favour of later action (since I'm not absolutely 100% sure that start
-    and end times define closed intervals)."""
+    """Turn action names, start times and end times into a vector of
+    categorical variables (i.e. non-negative boudned integers). Resolves
+    conflicts (two actions happening at the same time) in favour of later
+    action (since I'm not absolutely 100% sure that start and end times define
+    closed intervals)."""
+    assert max(end_frames) <= num_frames, "only %d frames, but end_frames " \
+        "goes up to %d" % (num_frames, max(end_frames))
+
     sort_inds = np.argsort(start_frames)
     start_frames = start_frames[sort_inds]
     end_frames = end_frames[sort_inds]
     acts_by_time = acts_by_time[sort_inds]
-    int_classes = np.zeros((num_frames,), dtype=int)
+    int_classes = np.zeros((num_frames,), dtype='uint8')
     for start, end, act in zip(start_frames, end_frames, acts_by_time):
-        act_id, = np.argwhere(all_acts == act)
+        act_id = int(np.argwhere(all_acts == act))
+        assert 0 <= act_id <= 255, "act_id=%d won't fit in uint8" % act_id
         int_classes[start:end+1] = act_id
 
-    # now one-hot
-    rv = np.zeros((num_frames, len(all_acts)))
-    rv[np.arange(num_frames), int_classes] = 1
-
-    assert max(end_frames) <= num_frames, "only %d frames, but end_frames " \
-        "goes up to %d" % (num_frames, max(end_frames))
-
-    return rv
+    return int_classes
 
 
 def load_attrs(attr_path):
@@ -224,7 +222,7 @@ def load_seq(args):
     start_frames = attr_dict['start_frames'][vid_mask]
     end_frames = attr_dict['end_frames'][vid_mask]
     act_names = attr_dict['activities'][vid_mask]
-    actions = acts_to_one_hot(start_frames,
+    actions = acts_to_cat_vec(start_frames,
                               end_frames,
                               act_names,
                               np.asarray(ACTION_LIST),
