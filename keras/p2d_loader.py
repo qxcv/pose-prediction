@@ -394,6 +394,10 @@ class P2DDataset(object):
         for vid_idx in vids.index:
             feats = vids['poses'][vid_idx]
             actions = vids['actions'][vid_idx]
+            if len(actions) < full_length:
+                print('Skipping %s becuase it is too short (only %d frames)!'
+                      % (vids['vid_name'][vid_idx], len(actions)))
+                continue
 
             # need T*D features (T time, D dimensionality of features)
             assert feats.ndim == 2, feats.shape
