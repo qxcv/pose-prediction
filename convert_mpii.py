@@ -31,9 +31,6 @@ ACTION_MERGES = {knife_act: 'knife actionV' for knife_act in [
     'cut apartV', 'cut diceV', 'cut off endsV', 'cut out insideV',
     'cut stripesV', 'cutV', 'sliceV', 'chopV'
 ]}
-# XXX: this is broken! Some actions aren't registering, and I can't figure out
-# why. Example: s13-d12-cam-002 is claimed to have no actions except n/a, and
-# yet it clearly includes some take_out actions. Why is this happening?
 ACTION_LIST = [
     'n/a',                # unknown (not in email to Anoop)
     'screw openV',        # 1.  Screw open
@@ -55,7 +52,31 @@ ACTION_LIST = [
     'open eggV',          # 17. Open egg
     'stampV',             # 18. Stamp
 ]
+# Accounts for temporal subsampling of frames applied before pose estimation.
+# In this case, we've only got frames 1, 11, 21, etc.
+FRAME_SKIP_FACTOR = 10
 
+# Here are the fields in Anoop's MAT file (see MPIICA2_Actions18 in
+# /data/home/cherian/MPII/MPII2/MPIICA2_Actions18.mat). Not using his MAT file
+# yet, but will probably use it eveuntually.
+#
+#  6164x1 struct array with fields:
+#
+#     video_id
+#     seq_name
+#     clip_path
+#     start_frame
+#     end_frame
+#     num_frames
+#     frame_name
+#     person_idx
+#     cropbox
+#     poses
+#     activity_id
+#     activity_labels
+#     pose_visibility
+#     frames
+#     dimensions
 
 def load_str_cells(fp, path):
     """Load a Matlab cell array of strings from a path within a h5py File
@@ -83,15 +104,11 @@ def merge_acts(acts_arr):
     for idx, act in enumerate(acts_arr):
         merged = False
         if act in ACTION_MERGES:
-            # XXX
-            print('Merging %s into %s' % (act, ACTION_MERGES[act]))
             acts_arr[idx] = act = ACTION_MERGES[act]
             merged = True
         if act not in al_set:
             assert not merged, "about to remove merged action (?! why " \
                 "bother with merge if you drop it?)"
-            # XXX
-            print('Replacing %s with n/a' % act)
             acts_arr[idx] = act = 'n/a'
 
     # now check that everything in action list (except n/a action) appears in
@@ -121,6 +138,9 @@ def acts_to_one_hot(start_frames, end_frames, acts_by_time, all_acts,
     rv = np.zeros((num_frames, len(all_acts)))
     rv[np.arange(num_frames), int_classes] = 1
 
+    assert max(end_frames) <= num_frames, "only %d frames, but end_frames " \
+        "goes up to %d" % (num_frames, max(end_frames))
+
     return rv
 
 
@@ -138,9 +158,10 @@ def load_attrs(attr_path):
         def fai(p):
             return fp[p].value.flatten().astype(int)
         # Subtract 1 to make them zero-based. They still use closed intervals,
-        # IIRC.
-        start_frames = fai('/annos/startFrame') - 1
-        end_frames = fai('/annos/endFrame') - 1
+        # IIRC. The division is to account for fact that a large fraction of
+        # frames were dropped before pose processing.
+        start_frames = (fai('/annos/startFrame') - 1) // FRAME_SKIP_FACTOR
+        end_frames = (fai('/annos/endFrame') - 1) // FRAME_SKIP_FACTOR
         vid_ids = fai('/annos/fileId')
 
         activities = np.asarray(load_str_cells(fp, '/annos/activity'))
@@ -203,8 +224,11 @@ def load_seq(args):
     start_frames = attr_dict['start_frames'][vid_mask]
     end_frames = attr_dict['end_frames'][vid_mask]
     act_names = attr_dict['activities'][vid_mask]
-    actions = acts_to_one_hot(start_frames, end_frames, act_names,
-                              np.asarray(ACTION_LIST), len(joints))
+    actions = acts_to_one_hot(start_frames,
+                              end_frames,
+                              act_names,
+                              np.asarray(ACTION_LIST),
+                              len(joints))
 
     return joints, actions
 
@@ -227,11 +251,8 @@ if __name__ == '__main__':
 
     with File(args.dest, 'w') as fp:
         skipped = []
-        raise RuntimeError('This is all totally broken. Fix it before you do anything else.')
         with Pool() as p:
-            # XXX: reinstate pool
-            # seq_iter = p.imap(load_seq, ((d, attr_dict) for d in dir_list))
-            seq_iter = map(load_seq, ((d, attr_dict) for d in dir_list))
+            seq_iter = p.imap(load_seq, ((d, attr_dict) for d in dir_list))
             zipper = zip(dir_list, seq_iter)
             for dir_path, pair in tqdm(zipper, total=len(dir_list)):
                 joints, actions = pair
@@ -240,12 +261,15 @@ if __name__ == '__main__':
                     skipped.append(id_str)
                     continue
                 prefix = '/seqs/' + id_str
+                assert len(joints) == len(actions)
                 fp[prefix + '/poses'] = joints
                 fp[prefix + '/actions'] = actions
-        fp['/parents'] = np.array(PARENTS, dtype=int)
+
         fp['/action_names'] = np.array([ord(c) for c in dumps(ACTION_LIST)],
                                        dtype='uint8')
         fp['/num_actions'] = len(ACTION_LIST)
+        fp['/parents'] = np.array(PARENTS, dtype=int)
+
         if skipped:
             print('WARNING: skipped %i seq(s) due to scale:' % len(skipped),
                   file=sys.stderr)
