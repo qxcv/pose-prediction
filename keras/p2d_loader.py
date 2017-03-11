@@ -122,14 +122,17 @@ def preprocess_sequence(poses, skip, parents, smooth_sigma=False,
     return shaped, offset, scale
 
 
-def _reconstruct_poses(flat_poses, parents, pp_offset, pp_scale):
+def _reconstruct_poses(flat_poses, parents, pp_offset=None, pp_scale=None):
     """Undo parent-relative joint transform. Will not undo the uniform scaling
     applied to each sequence."""
     # shape of poses shold be (num training samples)*(time)*(flattened
     # dimensions)
     assert flat_poses.ndim == 3, flat_poses.shape
-    assert pp_offset.size == 2, 'expect offset to be XY vec'
-    assert np.asarray(pp_scale).size == 1, 'expect scale to be scalar'
+    if pp_offset is not None or pp_scale is not None:
+        assert pp_offset is not None
+        assert pp_scale is not None
+        assert pp_offset.size == 2, 'expect offset to be XY vec'
+        assert np.asarray(pp_scale).size == 1, 'expect scale to be scalar'
 
     # rel_poses is a 4D array: (num samples)*T*(XY)*J
     rel_poses = flat_poses.reshape(flat_poses.shape[:2] + (2, -1))
@@ -150,8 +153,9 @@ def _reconstruct_poses(flat_poses, parents, pp_offset, pp_scale):
         offsets = rel_poses[:, :, :, joint]
         true_poses[:, :, :, joint] = parent_pos + offsets
 
-    # add back pp_offset and pp_scale
-    true_poses = true_poses * pp_scale + pp_offset.reshape((1, 1, 2, 1))
+    if pp_offset is not None:
+        # add back pp_offset and pp_scale
+        true_poses = true_poses * pp_scale + pp_offset.reshape((1, 1, 2, 1))
 
     return true_poses
 
@@ -345,6 +349,8 @@ class P2DDataset(object):
                 vid_one_hot_acts = np.zeros((len(vid_actions),
                                              self.num_actions),
                                             dtype='float32')
+                inds = (np.arange(len(vid_one_hot_acts)), vid_actions)
+                vid_one_hot_acts[inds] = 1
 
             range_count = len(vid_poses) - seq_skip * seq_length + 1
 
@@ -471,7 +477,7 @@ class P2DDataset(object):
 
         return completions
 
-    def reconstruct_poses(self, rel_block, vid_name):
+    def reconstruct_poses(self, rel_block, vid_name=None):
         assert rel_block.ndim == 3 \
             and rel_block.shape[-1] == 2 * len(self.parents), \
             rel_block.shape
@@ -482,11 +488,15 @@ class P2DDataset(object):
 
         # 2) Undo preprocess_sequence (except for head thing, which was a
         #    one-way trip)
-        vid_idx = np.argwhere(self.videos['vid_name'] == vid_name)
-        pp_offset = self.videos['pp_offset'][vid_idx]
-        pp_scale = self.videos['pp_scale'][vid_idx]
-        block = _reconstruct_poses(rel_block, self.parents, pp_offset,
-                                   pp_scale)
+        if vid_name is not None:
+            # will fail if there are duplicate video names (maybe I should fix this...)
+            vid_idx = int(np.argwhere(self.videos['vid_name'] == vid_name))
+            pp_offset = self.videos['pp_offset'][vid_idx]
+            pp_scale = self.videos['pp_scale'][vid_idx]
+            block = _reconstruct_poses(rel_block, self.parents, pp_offset,
+                                    pp_scale)
+        else:
+            block = _reconstruct_poses(rel_block, self.parents)
 
         assert block.shape == rel_block.shape[:2] + (2, len(self.parents)), \
             block.shape
