@@ -392,8 +392,10 @@ class P2DDataset(object):
         rv = []
 
         for vid_idx in vids.index:
+            vid_name = vids['vid_name'][vid_idx]
             feats = vids['poses'][vid_idx]
             actions = vids['actions'][vid_idx]
+            mask = vids['mask'][vid_idx]
             if len(actions) < full_length:
                 print('Skipping %s becuase it is too short (only %d frames)!'
                       % (vids['vid_name'][vid_idx], len(actions)))
@@ -406,6 +408,7 @@ class P2DDataset(object):
             assert len(feats) == len(actions)
             offset = (full_length - act_length) * seq_skip
             all_runs = _runs(actions[offset:])
+
             # TODO: check what fraction of these are too short. Per Anoop's
             # suggestion, it probably makes sense to include a bit of context
             # beforehand. That means that I don't have to guarantee that the
@@ -417,15 +420,33 @@ class P2DDataset(object):
                     continue
                 stop += offset
                 range_end = stop - (seq_skip * full_length) + 1
+
                 for sub_start in range(start, range_end, gap):
                     # no need to temporally downsample; features have already
                     # been temporally downsampled
                     these_feats = feats[sub_start:sub_start+full_length*seq_skip:seq_skip]
                     assert len(these_feats) == full_length
-                    suffix = actions[sub_start:sub_start+full_length*seq_skip:seq_skip][-act_length:]
-                    assert (suffix == action).all(), \
-                        "suffix %s should be all action %d" % (suffix, action)
-                    rv.append((these_feats, action))
+
+                    these_actions = actions[sub_start:sub_start+full_length*seq_skip:seq_skip]
+                    action_suffix = these_actions[-act_length:]
+                    assert len(these_actions) == full_length
+                    assert len(action_suffix) == act_length
+                    assert (action_suffix == action).all(), \
+                        "suffix %s should be all action %d" % (action_suffix, action)
+
+                    this_mask = mask[sub_start:sub_start+full_length*seq_skip:seq_skip]
+                    assert len(this_mask) == full_length
+
+                    rv.append({
+                        'poses': these_feats,
+                        'mask': this_mask,
+                        # 'actions' is a vector of actinos for the entire
+                        # sequence. 'action_label' is the action at the end
+                        # (which the action classifier must predict!)
+                        'actions': these_actions,
+                        'action_label': action,
+                        'vid_name': vid_name
+                    })
 
         return rv
 
@@ -498,7 +519,7 @@ class P2DDataset(object):
             pp_offset = self.videos['pp_offset'][vid_idx]
             pp_scale = self.videos['pp_scale'][vid_idx]
             block = _reconstruct_poses(rel_block, self.parents, pp_offset,
-                                    pp_scale)
+                                       pp_scale)
         else:
             block = _reconstruct_poses(rel_block, self.parents)
 
