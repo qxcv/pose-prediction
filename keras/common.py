@@ -384,7 +384,7 @@ class PatienceCallback(Callback):
 
     def on_epoch_end(self, epoch, logs):
         epoch_loss = logs[self.quantity]
-        improved = epoch_loss < self.best_loss - min_improvement
+        improved = epoch_loss < self.best_loss - self.min_improvement
         expired = self.waiting > self.patience
         if expired or improved:
             # If we've improved or run out of time, reset counters

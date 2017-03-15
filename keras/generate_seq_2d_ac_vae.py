@@ -16,7 +16,6 @@ from keras.layers import Dense, Activation, TimeDistributed, LSTM, \
     Input, Lambda, RepeatVector, Embedding, Dropout
 from keras.models import Model, load_model
 from keras.optimizers import RMSprop
-
 import numpy as np
 
 from common import VariableScaler, ScaleRamper
@@ -284,7 +283,7 @@ def train_model(train_X, train_A, val_X, val_A, db, args):
         pose_encoder_path, act_encoder_path, decoder_path = model_paths(epoch,
                                                                         logs)
         print('Saving pose encoder to %s' % pose_encoder_path)
-        pose_encoder.save(act_encoder_path)
+        pose_encoder.save(pose_encoder_path)
         print('Saving action encoder to %s' % act_encoder_path)
         act_encoder.save(act_encoder_path)
         print('Saving decoder to %s' % decoder_path)
