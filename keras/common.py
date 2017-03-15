@@ -367,12 +367,13 @@ class VariableScaler(Layer):
 class PatienceCallback(Callback):
     """Base class for things which wait for loss to plateau"""
 
-    def __init__(self, patience, quantity='val_loss'):
+    def __init__(self, patience, quantity='val_loss', min_improvement=0):
         self.waiting = 0
         self.best_loss = float('inf')
         self.quantity = quantity
         self.should_update = True
         self.patience = patience
+        self.min_improvement = min_improvement
 
     def on_epoch_begin(self, epoch, logs={}):
         """Do update at beginning of epoch instead of the end. This
@@ -383,7 +384,7 @@ class PatienceCallback(Callback):
 
     def on_epoch_end(self, epoch, logs):
         epoch_loss = logs[self.quantity]
-        improved = epoch_loss < self.best_loss
+        improved = epoch_loss < self.best_loss - min_improvement
         expired = self.waiting > self.patience
         if expired or improved:
             # If we've improved or run out of time, reset counters
