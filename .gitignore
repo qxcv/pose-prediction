@@ -10,6 +10,7 @@
 /keras/h36m-3d-poses/
 /penn
 *.h5
+.ipynb_checkpoints/
 
 # Editor cruft
 *.swp
