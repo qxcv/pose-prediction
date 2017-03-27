@@ -228,7 +228,7 @@ def load_seq(args):
                               np.asarray(ACTION_LIST),
                               len(joints))
 
-    return joints, actions
+    return joints, actions, scale
 
 
 parser = ArgumentParser()
@@ -252,8 +252,8 @@ if __name__ == '__main__':
         with Pool() as p:
             seq_iter = p.imap(load_seq, ((d, attr_dict) for d in dir_list))
             zipper = zip(dir_list, seq_iter)
-            for dir_path, pair in tqdm(zipper, total=len(dir_list)):
-                joints, actions = pair
+            for dir_path, triple in tqdm(zipper, total=len(dir_list)):
+                joints, actions, scale = triple
                 id_str = path.basename(dir_path)
                 if joints is None:
                     skipped.append(id_str)
@@ -262,6 +262,7 @@ if __name__ == '__main__':
                 assert len(joints) == len(actions)
                 fp[prefix + '/poses'] = joints
                 fp[prefix + '/actions'] = actions
+                fp[prefix + '/scale'] = scale
 
         fp['/action_names'] = np.array([ord(c) for c in dumps(ACTION_LIST)],
                                        dtype='uint8')
