@@ -71,7 +71,11 @@ def head_remover(parents):
     return transition, new_parents
 
 
-def preprocess_sequence(poses, skip, parents, smooth_sigma=False,
+def preprocess_sequence(poses,
+                        skip,
+                        parents,
+                        smooth_sigma=False,
+                        head_vel=True,
                         hrm_mat=None):
     """Preprocess a sequence of 2D poses to have more tractable representation.
     `parents` array is used to calculate output entries which are
@@ -106,9 +110,12 @@ def preprocess_sequence(poses, skip, parents, smooth_sigma=False,
     if parents is not None:
         # Compute actual data (relative offsets are easier to learn)
         relpose = np.zeros_like(norm_poses)
-        # Record delta from frame which is <skip> steps in the past
-        relpose[skip:, :, 0] \
-            = norm_poses[skip:, :, 0] - norm_poses[:-skip, :, 0]
+        if head_vel:
+            # Record delta from frame which is <skip> steps in the past
+            relpose[skip:, :, 0] \
+                = norm_poses[skip:, :, 0] - norm_poses[:-skip, :, 0]
+        else:
+            relpose[:, :, 0] = norm_poses[:, :, 0]
         # Other norm_poses record delta from parents
         for jt in range(1, len(parents)):
             pa = parents[jt]
@@ -122,7 +129,11 @@ def preprocess_sequence(poses, skip, parents, smooth_sigma=False,
     return shaped, offset, scale
 
 
-def _reconstruct_poses(flat_poses, parents, pp_offset=None, pp_scale=None):
+def _reconstruct_poses(flat_poses,
+                       parents,
+                       pp_offset=None,
+                       pp_scale=None,
+                       head_vel=True):
     """Undo parent-relative joint transform. Will not undo the uniform scaling
     applied to each sequence."""
     # shape of poses shold be (num training samples)*(time)*(flattened
@@ -141,10 +152,13 @@ def _reconstruct_poses(flat_poses, parents, pp_offset=None, pp_scale=None):
     assert Dxy == 2
     assert len(parents) == J
 
-    # start by restoring head from velocity param
-    rel_heads = rel_poses[:, :, :, 0]
-    true_heads = np.cumsum(rel_heads, axis=1)
-    true_poses[:, :, :, 0] = true_heads
+    # start by restoring head from velocity param, if necessary
+    if head_vel:
+        rel_heads = rel_poses[:, :, :, 0]
+        true_heads = np.cumsum(rel_heads, axis=1)
+        true_poses[:, :, :, 0] = true_heads
+    else:
+        true_poses[:, :, :, 0] = rel_poses[:, :, :, 0]
 
     # now reconstruct remaining joints from parents
     for joint in range(1, len(parents)):
@@ -195,7 +209,8 @@ class P2DDataset(object):
                  relative=True,
                  aclass_full_length=128,
                  aclass_act_length=8,
-                 remove_head=False):
+                 remove_head=False,
+                 head_vel=True):
         """Preprocess an open HDF5 file which has been formatted to hold 2D
         poses.
 
@@ -227,6 +242,7 @@ class P2DDataset(object):
         self.completion_length = completion_length
         self.aclass_full_length = aclass_full_length
         self.aclass_act_length = 8
+        self.head_vel = head_vel
         videos_list = []
 
         with h5py.File(data_file_path, 'r') as fp:
@@ -259,13 +275,21 @@ class P2DDataset(object):
                 = self._train_test_split(vid_names, self.val_frac)
 
             for vid_name in fp['seqs']:
+                sfact_path = '/seqs/' + vid_name + '/scale'
+                if sfact_path in fp:
+                    seq_scale = fp[sfact_path].value
+                else:
+                    seq_scale = 1.0
+
                 orig_poses = fp['/seqs/' + vid_name + '/poses'].value
+                orig_poses = orig_poses.astype('float32') / seq_scale
                 # don't both with relative poses
                 norm_poses, pp_offset, pp_scale = preprocess_sequence(
                     orig_poses,
                     self.seq_skip,
                     self.parents if self.relative else None,
                     smooth_sigma=2,
+                    head_vel=head_vel,
                     hrm_mat=hrm_mat)
                 norm_poses = norm_poses.astype('float32')
                 # make sure we don't reuse poses in native parameterisation
@@ -275,6 +299,9 @@ class P2DDataset(object):
                     actions = fp['/seqs/' + vid_name + '/actions'].value
                     assert len(actions) == len(norm_poses)
 
+                # XXX: this is a terrible idea! What if the manipulations we do
+                # in preprocess_sequence destory some information relevant to
+                # validity?
                 if '/seqs/' + vid_name + '/valid' in fp:
                     mask = fp['/seqs/' + vid_name + '/valid'].value
                     mask = mask.reshape((mask.shape[0], -1)).astype('float32')
@@ -290,7 +317,8 @@ class P2DDataset(object):
                     'poses': norm_poses,
                     'vid_name': vid_name,
                     'mask': mask,
-                    'is_val': vid_name in self.val_vids
+                    'is_val': vid_name in self.val_vids,
+                    'seq_scale': seq_scale
                 }
                 if self.have_actions:
                     vid_meta['actions'] = actions
@@ -307,7 +335,9 @@ class P2DDataset(object):
         # setting low std to 1 will have effect of making low-variance features
         # (almost) constant zero
         self.std[self.std < 1e-5] = 1
-        for poses, mask in zip(self.videos['poses'], self.videos['mask']):
+        pms_zip = zip(self.videos['poses'], self.videos['mask'],
+                      self.videos['seq_scale'])
+        for poses, mask, pre_scale in pms_zip:
             poses[:] = (poses[:] - self.mean) / self.std
             # TODO: should I leave this in? Does it make things better?
             poses[mask == 0] = 0
@@ -346,9 +376,8 @@ class P2DDataset(object):
             vid_mask = vids['mask'][vid_idx]
             if self.have_actions:
                 vid_actions = vids['actions'][vid_idx]
-                vid_one_hot_acts = np.zeros((len(vid_actions),
-                                             self.num_actions),
-                                            dtype='float32')
+                vid_one_hot_acts = np.zeros(
+                    (len(vid_actions), self.num_actions), dtype='float32')
                 inds = (np.arange(len(vid_one_hot_acts)), vid_actions)
                 vid_one_hot_acts[inds] = 1
 
@@ -397,8 +426,8 @@ class P2DDataset(object):
             actions = vids['actions'][vid_idx]
             mask = vids['mask'][vid_idx]
             if len(actions) < full_length:
-                print('Skipping %s becuase it is too short (only %d frames)!'
-                      % (vids['vid_name'][vid_idx], len(actions)))
+                print('Skipping %s becuase it is too short (only %d frames)!' %
+                      (vids['vid_name'][vid_idx], len(actions)))
                 continue
 
             # need T*D features (T time, D dimensionality of features)
@@ -424,17 +453,21 @@ class P2DDataset(object):
                 for sub_start in range(start, range_end, gap):
                     # no need to temporally downsample; features have already
                     # been temporally downsampled
-                    these_feats = feats[sub_start:sub_start+full_length*seq_skip:seq_skip]
+                    these_feats = feats[sub_start:sub_start + full_length *
+                                        seq_skip:seq_skip]
                     assert len(these_feats) == full_length
 
-                    these_actions = actions[sub_start:sub_start+full_length*seq_skip:seq_skip]
+                    these_actions = actions[sub_start:sub_start + full_length *
+                                            seq_skip:seq_skip]
                     action_suffix = these_actions[-act_length:]
                     assert len(these_actions) == full_length
                     assert len(action_suffix) == act_length
                     assert (action_suffix == action).all(), \
-                        "suffix %s should be all action %d" % (action_suffix, action)
+                        "suffix %s should be all action %d" \
+                        % (action_suffix, action)
 
-                    this_mask = mask[sub_start:sub_start+full_length*seq_skip:seq_skip]
+                    this_mask = mask[sub_start:sub_start + full_length *
+                                     seq_skip:seq_skip]
                     assert len(this_mask) == full_length
 
                     rv.append({
@@ -470,8 +503,8 @@ class P2DDataset(object):
 
             if self.have_actions:
                 actions = vids['actions'][vid_idx]
-                one_hot_acts = np.zeros((len(norm_poses), self.num_actions),
-                                        dtype='float32')
+                one_hot_acts = np.zeros(
+                    (len(norm_poses), self.num_actions), dtype='float32')
                 one_hot_acts[(range(len(actions)), actions)] = 1
 
             range_bound = 1 + len(norm_poses) - seq_skip * completion_length
@@ -511,17 +544,30 @@ class P2DDataset(object):
         rel_block = rel_block * self.std[None, ...] \
             + self.mean[None, ...]
 
-        # 2) Undo preprocess_sequence (except for head thing, which was a
-        #    one-way trip)
         if vid_name is not None:
-            # will fail if there are duplicate video names (maybe I should fix this...)
+            # will fail if there are duplicate video names (maybe I should fix
+            # this...)
             vid_idx = int(np.argwhere(self.videos['vid_name'] == vid_name))
+
+        # 2) Undo preprocess_sequence (except for head removal thing;
+        #    decapitation is a one-way trip)
+        if vid_name is not None:
             pp_offset = self.videos['pp_offset'][vid_idx]
             pp_scale = self.videos['pp_scale'][vid_idx]
-            block = _reconstruct_poses(rel_block, self.parents, pp_offset,
-                                       pp_scale)
+            block = _reconstruct_poses(
+                rel_block,
+                self.parents,
+                pp_offset,
+                pp_scale,
+                head_vel=self.head_vel)
         else:
-            block = _reconstruct_poses(rel_block, self.parents)
+            block = _reconstruct_poses(
+                rel_block, self.parents, head_vel=self.head_vel)
+
+        # 3) Undo video-specific scaling, if necessary
+        if vid_name is not None:
+            vid_scale = self.videos['seq_scale'][vid_idx]
+            block = block * vid_scale
 
         assert block.shape == rel_block.shape[:2] + (2, len(self.parents)), \
             block.shape

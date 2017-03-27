@@ -75,14 +75,13 @@ def load_seq(mat_path):
     # Make sure that scale is sane
     if abs(scale) < 40 or abs(scale) > 400:
         return None
-    joints /= scale
 
     # Need to be T*XY*J
     joints = joints.transpose((0, 2, 1))
     assert joints.shape[1] == 2, joints.shape
     assert joints.shape[0] == x.shape[0], joints.shape
 
-    return id_str, joints, mat['action'], actual_visible
+    return id_str, joints, mat['action'], actual_visible, scale
 
 
 if __name__ == '__main__':
@@ -95,12 +94,13 @@ if __name__ == '__main__':
             if rv is None:
                 skipped.append(mat_path)
                 continue
-            id_str, joints, action, visible = rv
+            id_str, joints, action, visible, scale = rv
             action_id = ACTION_NAMES.index(action)
             prefix = '/seqs/' + id_str + '/'
             fp[prefix + 'poses'] = joints
             fp[prefix + 'actions'] = np.full((len(joints),), action_id)
             fp[prefix + 'valid'] = visible
+            fp[prefix + 'scale'] = scale
         fp['/parents'] = np.array(PARENTS, dtype=int)
         fp['/action_names'] = np.array([ord(c) for c in dumps(ACTION_NAMES)],
                                        dtype='uint8')
