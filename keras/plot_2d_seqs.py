@@ -34,13 +34,15 @@ def draw_poses(title, parents, pose_sequence, frame_paths=None, frames=None,
             get_frame = lambda spi, fn: frame_dict[frame_paths[spi][fn]]
     elif frames is not None:
         get_frame = lambda spi, fn: frames[spi][fn]
+    else:
+        get_frame = None
 
     # Arrange plots in a square
     cols = int(np.ceil(np.sqrt(N)))
     rows = int(np.ceil(N / float(cols)))
     subplots = []
     all_lines = []
-    if frame_paths is not None:
+    if get_frame is not None:
         image_handles = []
     if action_labels is not None:
         label_handles = []
@@ -50,7 +52,7 @@ def draw_poses(title, parents, pose_sequence, frame_paths=None, frames=None,
 
         sp_lines = []
         sp_joints = pose_sequence[spi]
-        if frame_paths is None:
+        if get_frame is None:
             xmin, ymin = sp_joints.min(axis=0).min(axis=1)
             xmax, ymax = sp_joints.max(axis=0).max(axis=1)
             ax.set_xlim(xmin, xmax)
@@ -91,7 +93,7 @@ def draw_poses(title, parents, pose_sequence, frame_paths=None, frames=None,
             # one line per edge, so no line for the parent
             assert len(parents) == len(lines) + 1
 
-            if frame_paths is not None:
+            if get_frame is not None:
                 im = get_frame(spi, frame)
                 handle = image_handles[spi]
                 handle.set_data(im)
