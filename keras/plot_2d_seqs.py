@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from scipy.misc import imread
 
 
-def draw_poses(title, parents, pose_sequence, frame_paths=None,
+def draw_poses(title, parents, pose_sequence, frame_paths=None, frames=None,
                subplot_titles=None, fps=50/3.0, crossover=None,
                action_labels=None):
     N, T, _, J = pose_sequence.shape
@@ -17,18 +17,23 @@ def draw_poses(title, parents, pose_sequence, frame_paths=None,
     fig.suptitle(title)
 
     if frame_paths is not None:
+        assert frames is None, \
+            'can only handle one of {frames,frame_paths}'
         lazy = any(len(f) > 100 for f in frame_paths)
         if lazy:
             print('Lazy-loading image sequence')
-            get_frame = imread
+            # spi = subplot index, fn = frame number
+            get_frame = lambda spi, fn: imread(frame_paths[spi][fn])
         else:
             print('Eager-loading image sequence')
-            frames = {}
+            frame_dict = {}
             for subseq_paths in frame_paths:
                 for frame_path in subseq_paths:
-                    if frame_path not in frames:
-                        frames[frame_path] = imread(frame_path)
-            get_frame = lambda frame_path: frames[frame_path]
+                    if frame_path not in frame_dict:
+                        frame_dict[frame_path] = imread(frame_path)
+            get_frame = lambda spi, fn: frame_dict[frame_paths[spi][fn]]
+    elif frames is not None:
+        get_frame = lambda spi, fn: frames[spi][fn]
 
     # Arrange plots in a square
     cols = int(np.ceil(np.sqrt(N)))
@@ -53,7 +58,7 @@ def draw_poses(title, parents, pose_sequence, frame_paths=None,
             ax.set_aspect('equal')
             ax.invert_yaxis()
         else:
-            im = get_frame(frame_paths[spi][0])
+            im = get_frame(spi, 0)
             image_handles.append(ax.imshow(im))
 
         if action_labels is not None:
@@ -87,7 +92,7 @@ def draw_poses(title, parents, pose_sequence, frame_paths=None,
             assert len(parents) == len(lines) + 1
 
             if frame_paths is not None:
-                im = get_frame(frame_paths[spi][frame])
+                im = get_frame(spi, frame)
                 handle = image_handles[spi]
                 handle.set_data(im)
                 redrawn.append(handle)
