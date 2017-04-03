@@ -91,14 +91,14 @@ Track = namedtuple('Track',
                    ['start_frame', 'end_frame', 'orig_id', 'skeletons'])
 
 
-def _finalise_tracks(now_tracking, keys_to_remove, out_tracks, end_frame):
+def _finalise_tracks(now_tracking, keys_to_remove, out_tracks, end_frame,
+                     min_length):
     for key in sorted(keys_to_remove):
         start_frame, bodies = now_tracking[key]
-        first_skel = bodies[0].skeleton
-        num_joints = len(first_skel)
-        skeletons = np.recarray((len(bodies), num_joints), dtype=joints_dtype)
-        for b in range(len(bodies)):
-            skeletons[b, :] = bodies[b].skeleton
+        if end_frame - start_frame + 1 < min_length:
+            continue
+        skeletons = np.stack([b.skeleton for b in bodies], axis=0) \
+                      .view(np.recarray)
 
         out_tracks.append(
             Track(
@@ -120,15 +120,18 @@ def extract_tracks(frames, min_length=1):
         seen = set()
         for body in frame:
             tid = body.track_id
+            seen.add(tid)
             # if we're tracking the person at the moment, add the new skeleton
             tid_tup = now_tracking.setdefault(tid, (frame_num, []))
             tid_tup[1].append(body)
 
         # create tracks for anyone out-of-frame
         to_remove = now_tracking.keys() - seen
-        _finalise_tracks(now_tracking, to_remove, tracks, frame_num - 1)
+        _finalise_tracks(now_tracking, to_remove, tracks, frame_num - 1,
+                         min_length)
 
     # create tracks for any remaining people
-    _finalise_tracks(now_tracking, now_tracking.keys(), tracks, frame_num)
+    _finalise_tracks(now_tracking,
+                     now_tracking.keys(), tracks, frame_num, min_length)
 
     return tracks

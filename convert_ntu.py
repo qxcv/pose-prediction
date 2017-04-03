@@ -51,31 +51,33 @@ def read_skeleton_file(zip_file, path_to_skeleton):
     return skelly_meta, skelly_tracks
 
 
+JNI = {name: i for i, name in enumerate(JOINT_NAMES)}
+RHIP_ID = JNI['HipRight']
+LHIP_ID = JNI['HipLeft']
+LSHOL_ID = JNI['ShoulderLeft']
+RSHOL_ID = JNI['ShoulderRight']
+JOINTS_TO_KEEP = [
+    'Head', 'Neck', 'ShoulderRight', 'ElbowRight', 'WristRight',
+    'ShoulderLeft', 'ElbowLeft', 'WristLeft'
+]
+TO_KEEP_INDS = list(map(lambda k: JNI[k], JOINTS_TO_KEEP))
+
+
 def rescale(skeletons_2d):
-    rhip_id = JOINT_NAMES.index('HipRight')
-    lhip_id = JOINT_NAMES.index('HipLeft')
-    rshol_id = JOINT_NAMES.index('ShoulderLeft')
-    lshol_id = JOINT_NAMES.index('ShoulderRight')
     # want to make sure we haven't got integer data
     skeletons_2d = skeletons_2d.astype(float)
     fst_dists = np.linalg.norm(
-        skeletons_2d[..., rhip_id] - skeletons_2d[..., lshol_id], axis=1)
+        skeletons_2d[..., RHIP_ID] - skeletons_2d[..., LSHOL_ID], axis=1)
     snd_dists = np.linalg.norm(
-        skeletons_2d[..., lhip_id] - skeletons_2d[..., rshol_id], axis=1)
+        skeletons_2d[..., LHIP_ID] - skeletons_2d[..., RSHOL_ID], axis=1)
     scale = np.median(np.concatenate([fst_dists, snd_dists]))
-    # TODO: fix scale thing
+    # TODO: fix scale thing for small items
     if scale <= 1e-5:
         scale = 1
 
-    joints_to_keep = [
-        'Head', 'Neck', 'ShoulderRight', 'ElbowRight', 'WristRight',
-        'ShoulderLeft', 'ElbowLeft', 'WristLeft'
-    ]
-    to_keep_inds = list(map(JOINT_NAMES.index, joints_to_keep))
-
     # Corresponds to Top of head, Neck, Right shoulder, Right elbow, Right
     # wrist, Left shoulder, Left elbow, Left wrist (CPM)
-    trimmed_skeleton = skeletons_2d[:, :, to_keep_inds]
+    trimmed_skeleton = skeletons_2d[:, :, TO_KEEP_INDS]
     return trimmed_skeleton / scale, scale
 
 
@@ -102,7 +104,7 @@ if __name__ == '__main__':
                                      orig_id=track.orig_id,
                                      start_frame=track.start_frame,
                                      end_frame=track.end_frame)
-                prefix = '/seqs/' + track_name
+                prefix = '/seqs/' + track_name + '/'
 
                 action_id = skelly_meta['action']
                 prefix_2d = '/seqs/' + track_name + '/'
@@ -111,9 +113,10 @@ if __name__ == '__main__':
                 skeleton_xy = np.stack(
                     [track.skeletons.depth_x, track.skeletons.depth_y], axis=1)
                 scaled_skels, scale = rescale(skeleton_xy)
-                num_frames = len(track)
-                out_fp[prefix + 'poses'] = skeleton_xy
-                out_fp[prefix + 'actions'] = np.full((num_frames, ), action_id)
+                num_frames = len(skeleton_xy)
+                out_fp[prefix + 'poses'] = skeleton_xy.astype('float32')
+                out_fp[prefix + 'actions'] \
+                    = np.full((num_frames, ), action_id).astype('uint8')
                 out_fp[prefix + 'valid'] = np.ones_like(skeleton_xy) \
                                              .astype('uint8')
                 out_fp[prefix + 'scale'] = scale
