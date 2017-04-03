@@ -88,7 +88,7 @@ parser.add_argument('dest', help='path for HDF5 output file')
 if __name__ == '__main__':
     args = parser.parse_args()
     with ZipFile(args.ntu_path) as in_fp, h5py.File(args.dest) as out_fp:
-        for seq_path in tqdm(in_fp.namelist()):
+        for seq_path in tqdm(in_fp.namelist(), smoothing=0.005):
             if not seq_path.endswith('.skeleton'):
                 continue
             skelly_meta, skelly_tracks = read_skeleton_file(in_fp, seq_path)
