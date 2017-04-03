@@ -13,6 +13,11 @@ import numpy as np
 from scipy.misc import imread
 
 
+def mayavi_imshow(im):
+    # See https://geoexamples.blogspot.com.au/2014_02_01_archive.html
+    pass
+
+
 def draw_poses(title,
                parents,
                pose_sequence,

@@ -11,6 +11,7 @@
 /penn
 *.h5
 .ipynb_checkpoints/
+__pycache__/
 
 # Editor cruft
 *.swp
