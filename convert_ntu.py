@@ -12,7 +12,8 @@ import numpy as np
 from tqdm import tqdm
 
 from ntu import (ACTION_CLASSES, BAD_IDENTIFIERS, load_skeletons,
-                 extract_tracks, JOINT_NAMES)
+                 extract_tracks, JOINT_NAMES, JOINT_PARENT_INDS)
+from expmap import xyz_to_expmap
 
 # From readme in example code repo: SsssCcccPpppRrrrAaaa. S, C, P, R and A
 # denote setup, camera ID, performer ID, replication number (1/2), action
@@ -108,22 +109,28 @@ if __name__ == '__main__':
 
                 action_id = skelly_meta['action']
                 prefix_2d = '/seqs/' + track_name + '/'
-                # Confusing terminology, but "depth_x" = "x coordinate of joint
-                # in depth image"
+                # Confusing terminology, but "colour_x" = "x coordinate of
+                # joint in RGB (colour) image"
                 skeleton_xy = np.stack(
-                    [track.skeletons.depth_x, track.skeletons.depth_y], axis=1)
+                    [track.skeletons.colour_x, track.skeletons.colour_y],
+                    axis=1)
                 scaled_skels, scale = rescale(skeleton_xy)
                 num_frames = len(skeleton_xy)
+                action_vec = np.full((num_frames, ), action_id).astype('uint8')
                 out_fp[prefix + 'poses'] = skeleton_xy.astype('float32')
-                out_fp[prefix + 'actions'] \
-                    = np.full((num_frames, ), action_id).astype('uint8')
+                out_fp[prefix + 'actions'] = action_vec
                 out_fp[prefix + 'valid'] = np.ones_like(skeleton_xy) \
                                              .astype('uint8')
                 out_fp[prefix + 'scale'] = scale
 
                 # same, but for 3D data
                 prefix_3d = '/seqs3d/' + track_name + '/'
-                # TODO
+                skeleton_xyz = np.stack(
+                    [track.skeletons.x, track.skeletons.y, track.skeletons.z],
+                    axis=-1)
+                expmap = xyz_to_expmap(skeleton_xyz, JOINT_PARENT_INDS)
+                out_fp[prefix_3d + 'poses3d'] = expmap.astype('float32')
+                out_fp[prefix_3d + 'actions'] = action_vec
 
         action_names = [n for i, n in sorted(ACTION_CLASSES.items())]
         # use CPM parents

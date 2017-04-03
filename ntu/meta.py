@@ -375,3 +375,44 @@ JOINT_NAMES = [
     'KneeRight', 'AnkleRight', 'FootRight', 'SpineShoulder', 'HandTipLeft',
     'ThumbLeft', 'HandTipRight', 'ThumbRight'
 ]
+
+JOINT_INDS = {
+    name: idx for idx, name in enumerate(JOINT_NAMES)
+}
+
+# I'm using a hierarchy rooted at the head, rather than a traditional one
+JOINT_PARENT_NAMES = {
+    # parent root to itself for convenience
+    'Head': 'Head',
+    # stuff down the centre
+    'Neck': 'Head',
+    'SpineShoulder': 'Neck',
+    'SpineMid': 'SpineShoulder',
+    'SpineBase': 'SpineMid',
+    # stuff on the left
+    'ShoulderLeft': 'SpineShoulder',
+    'ElbowLeft': 'ShoulderLeft',
+    'WristLeft': 'ElbowLeft',
+    'HandLeft': 'WristLeft',
+    'ThumbLeft': 'HandLeft',
+    'HandTipLeft': 'HandLeft',
+    'HipLeft': 'SpineBase',
+    'KneeLeft': 'HipLeft',
+    'AnkleLeft': 'KneeLeft',
+    'FootLeft': 'AnkleLeft',
+    # stuff on the right
+    'ShoulderRight': 'SpineShoulder',
+    'ElbowRight': 'ShoulderRight',
+    'WristRight': 'ElbowRight',
+    'HandRight': 'WristRight',
+    'ThumbRight': 'HandRight',
+    'HandTipRight': 'HandRight',
+    'HipRight': 'SpineBase',
+    'KneeRight': 'HipRight',
+    'AnkleRight': 'KneeRight',
+    'FootRight': 'AnkleRight'
+}
+
+JOINT_PARENT_INDS = [
+    JOINT_INDS[JOINT_PARENT_NAMES[child_name]] for child_name in JOINT_NAMES
+]
