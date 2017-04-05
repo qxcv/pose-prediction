@@ -2,8 +2,20 @@
 Kinect-recorded datasets, too."""
 
 from collections import namedtuple
+from enum import IntEnum
 
 import numpy as np
+
+
+class TrackState(IntEnum):
+    """Kinect skeleton/joint tracking state. Details at
+    https://goo.gl/Ayto0c"""
+    # Position is garbage
+    NOT_TRACKED = 0
+    # Low confidence
+    INFERRED = 1
+    # High confidence
+    TRACKED = 2
 
 
 def str2bool(str):
@@ -23,11 +35,15 @@ def str2bool(str):
     raise ValueError('Could not interpret "%s" as a float' % str)
 
 
+def str2track(str_ts):
+    return TrackState(int(str_ts))
+
+
 def fline(format, fp):
     """Extract a formatted line"""
     line_elems = next(fp).strip().split()
     format_flat = ''.join(format.strip().split())
-    format_lookup = {'i': int, 'f': float, 'b': str2bool}
+    format_lookup = {'i': int, 'f': float, 'b': str2bool, 't': str2track}
     try:
         format_funcs = [format_lookup[c] for c in format_flat]
     except KeyError:
@@ -75,7 +91,7 @@ def load_skeletons(data):
             d = {}
             (d['track_id'], d['clip_flags'], d['confidence_lh'], d['state_lh'],
              d['confidence_rh'], d['state_rh'], d['restricted'], d['lean_x'],
-             d['lean_y'], d['track_state']) = fline('iififibffi', data)
+             d['lean_y'], d['track_state']) = fline('iififibfft', data)
             num_joints = fline('i', data)
             skelarray = np.recarray((num_joints, ), dtype=joints_dtype)
             for joint_num in range(num_joints):
@@ -116,9 +132,23 @@ def extract_tracks(frames, min_length=1):
     disapppears for one or more frames."""
     tracks = []
     now_tracking = {}
+    num_discarded = 0
     for frame_num, frame in enumerate(frames):
         seen = set()
         for body in frame:
+            # throw out skeletons which are not tracked as a whole, or which
+            # have untracked joints
+            joints_below = sum(joint.track_state < TrackState.TRACKED for
+                               joint in body.skeleton)
+            skel_below = body.track_state < TrackState.TRACKED
+            if skel_below or joints_below > 0:
+                num_discarded += 1
+                # Debug prints
+                # js = '%d untracked joints' % joints_below
+                # st = 'person untracked' if skel_below else 'person tracked'
+                # print('Throwing out skeleton (%s, %s)' % (st, js))
+                continue
+
             tid = body.track_id
             seen.add(tid)
             # if we're tracking the person at the moment, add the new skeleton
@@ -134,4 +164,4 @@ def extract_tracks(frames, min_length=1):
     _finalise_tracks(now_tracking,
                      now_tracking.keys(), tracks, frame_num, min_length)
 
-    return tracks
+    return tracks, num_discarded

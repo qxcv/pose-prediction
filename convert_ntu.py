@@ -13,7 +13,7 @@ from tqdm import tqdm
 
 from ntu import (ACTION_CLASSES, BAD_IDENTIFIERS, load_skeletons,
                  extract_tracks, JOINT_NAMES, JOINT_PARENT_INDS)
-from expmap import xyz_to_expmap
+from expmap import xyz_to_expmap, bone_lengths
 
 # From readme in example code repo: SsssCcccPpppRrrrAaaa. S, C, P, R and A
 # denote setup, camera ID, performer ID, replication number (1/2), action
@@ -47,9 +47,9 @@ def read_skeleton_file(zip_file, path_to_skeleton):
     # load_skeletons
     line_iter = iter(zip_file.read(path_to_skeleton).splitlines())
     skelly_frames = load_skeletons(line_iter)
-    skelly_tracks = extract_tracks(skelly_frames)
+    skelly_tracks, discarded = extract_tracks(skelly_frames)
 
-    return skelly_meta, skelly_tracks
+    return skelly_meta, skelly_tracks, discarded
 
 
 JNI = {name: i for i, name in enumerate(JOINT_NAMES)}
@@ -82,17 +82,32 @@ def rescale(skeletons_2d):
     return trimmed_skeleton / scale, scale
 
 
+def h5_json_encode(data):
+    """Turns rich Python data structure into array of bytes so that it can be
+    stuffed in an HDF5 file."""
+    char_codes = [ord(c) for c in dumps(data)]
+    return np.array(char_codes, dtype='uint8')
+
+
 parser = argparse.ArgumentParser()
 parser.add_argument('ntu_path', help='path to NTU RGB+D skeleton zip file')
 parser.add_argument('dest', help='path for HDF5 output file')
 
 if __name__ == '__main__':
     args = parser.parse_args()
-    with ZipFile(args.ntu_path) as in_fp, h5py.File(args.dest) as out_fp:
-        for seq_path in tqdm(in_fp.namelist(), smoothing=0.005):
+    with ZipFile(args.ntu_path) as in_fp, h5py.File(args.dest, 'w') as out_fp:
+        all_bone_lengths = []
+
+        tq_iter = tqdm(in_fp.namelist(), smoothing=0.005, postfix={'drop': 0})
+        dropped = 0
+        for seq_path in tq_iter:
             if not seq_path.endswith('.skeleton'):
                 continue
-            skelly_meta, skelly_tracks = read_skeleton_file(in_fp, seq_path)
+            skelly_meta, skelly_tracks, discarded \
+                = read_skeleton_file(in_fp, seq_path)
+            if discarded:
+                dropped += discarded
+                tq_iter.set_postfix(drop=dropped)
             ident = skelly_meta['ident']
             if ident in BAD_IDENTIFIERS:
                 continue
@@ -129,12 +144,20 @@ if __name__ == '__main__':
                     [track.skeletons.x, track.skeletons.y, track.skeletons.z],
                     axis=-1)
                 expmap = xyz_to_expmap(skeleton_xyz, JOINT_PARENT_INDS)
-                out_fp[prefix_3d + 'poses3d'] = expmap.astype('float32')
+                out_fp[prefix_3d + 'skeletons'] = expmap.astype('float32')
                 out_fp[prefix_3d + 'actions'] = action_vec
+                all_bone_lengths.append(bone_lengths(skeleton_xyz, JOINT_PARENT_INDS))
 
         action_names = [n for i, n in sorted(ACTION_CLASSES.items())]
         # use CPM parents
         out_fp['/parents'] = np.array([0, 0, 1, 2, 3, 1, 5, 6], dtype=int)
-        out_fp['/action_names'] = np.array(
-            [ord(c) for c in dumps(action_names)], dtype='uint8')
+        out_fp['/action_names'] = h5_json_encode(action_names)
         out_fp['/num_actions'] = len(action_names)
+
+        out_fp['/joint_names_3d'] = h5_json_encode(JOINT_NAMES)
+        out_fp['/parents_3d'] = np.array(JOINT_PARENT_INDS, dtype='uint8')
+        # store mean length for each bone just so that we can visualise motion
+        all_bone_lengths = np.concatenate(all_bone_lengths, axis=0)
+        mean_bone_lengths = all_bone_lengths.mean(axis=0)
+        assert mean_bone_lengths.shape == (len(JOINT_PARENT_INDS),)
+        out_fp['/bone_lengths_3d'] = mean_bone_lengths.astype('float32')

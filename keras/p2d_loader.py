@@ -197,6 +197,17 @@ def _runs(vec):
     return list(zip(act_vals, run_starts, run_stops))
 
 
+def _train_test_split(vid_names, val_frac):
+    # copy list so we can shuffle
+    vid_list = list(vid_names)
+    val_srng = np.random.RandomState(seed=8904511)
+    val_srng.shuffle(vid_list)
+    val_count = max(1, int(val_frac * len(vid_list)))
+    val_vids = set(vid_list[:val_count])
+    train_vids = set(vid_list) - val_vids
+    return train_vids, val_vids
+
+
 class P2DDataset(object):
     def __init__(self,
                  data_file_path,
@@ -214,7 +225,7 @@ class P2DDataset(object):
         """Preprocess an open HDF5 file which has been formatted to hold 2D
         poses.
 
-        :param data_file: The open HDF5 file.
+        :param data_file_path: Path to HDF5 file.
         :param seq_length: Length of output sequences.
         :param seq_skip: How many (original) frames apart each pose should be
             in an output sequence.
@@ -272,7 +283,7 @@ class P2DDataset(object):
 
             vid_names = list(fp['seqs'])
             self.train_vids, self.val_vids \
-                = self._train_test_split(vid_names, self.val_frac)
+                = _train_test_split(vid_names, self.val_frac)
 
             for vid_name in fp['seqs']:
                 sfact_path = '/seqs/' + vid_name + '/scale'
@@ -343,17 +354,6 @@ class P2DDataset(object):
             poses[mask == 0] = 0
 
         self.dim_obs = self.mean.size
-
-    @staticmethod
-    def _train_test_split(vid_names, val_frac):
-        # copy list so we can shuffle
-        vid_list = list(vid_names)
-        val_srng = np.random.RandomState(seed=8904511)
-        val_srng.shuffle(vid_list)
-        val_count = max(1, int(val_frac * len(vid_list)))
-        val_vids = set(vid_list[:val_count])
-        train_vids = set(vid_list) - val_vids
-        return train_vids, val_vids
 
     def get_pose_ds(self, train):
         # poses should be N*T*D, actions should be N*T*A if they exist
@@ -573,3 +573,113 @@ class P2DDataset(object):
             block.shape
 
         return block
+
+
+class P3DDataset(object):
+    """Mimics P2DDataset, but is specialised to 3D data. Much less complicated
+    because it doesn't need to deal with preprocessing, joint validity
+    (everything is assumed okay) or actions."""
+    def __init__(self,
+                 data_file_path,
+                 frame_skip,
+                 val_frac=0.2):
+        self.data_file_path = data_file_path
+        self.seq_skip = seq_skip
+        self.val_frac = val_frac
+        videos_list = []
+
+        with h5py.File(data_file_path, 'r') as fp:
+            vid_names = list(fp['seqs_3d'])
+            self.train_vids, self.val_vids \
+                = _train_test_split(vid_names, self.val_frac)
+
+            for vid_name in fp['seqs']:
+                skeletons = fp['/seqs/' + vid_name + '/skeletons'].value
+
+                vid_meta = {
+                    'skeletons': skeletons.astype('float32'),
+                    'vid_name': vid_name,
+                    'is_val': vid_name in self.val_vids,
+                }
+
+                videos_list.append(vid_meta)
+
+        self.videos = pd.DataFrame.from_records(videos_list)
+
+        train_vids = self.videos[~self.videos.is_val]
+        flat_skeletons = np.concatenate(train_vids.skeletons.as_matrix(), axis=0)
+        assert flat_skeletons.ndim == 2, flat_skeletons.shape
+        self.mean = flat_skeletons.mean(axis=0).reshape((1, -1))
+        self.std = flat_skeletons.std(axis=0).reshape((1, -1))
+        std_mask = self.std < 1e-5
+        self.std[std_mask] = 1
+        for skeletons in self.videos['skeletons']:
+            skeletons[:] = (skeletons[:] - self.mean) / self.std
+
+        self.dim_obs = self.mean.size
+
+    def get_ds_for_train(self, train, seq_length, seq_gap):
+        if train:
+            vids = self.videos[~self.videos.is_val]
+        else:
+            vids = self.videos[self.videos.is_val]
+
+        raise NotImplementedError()
+
+        seq_skip = self.seq_skip
+
+        skeleton_blocks = []
+
+        for vid_idx in vids.index:
+            vid_skeletons = vids['skeletons'][vid_idx]
+
+            range_count = len(vid_skeletons) - seq_skip * seq_length + 1
+
+            for i in range(0, range_count, gap):
+                skeleton_block = vid_skeletons[i:i + seq_skip * seq_length:seq_skip]
+                skeleton_blocks.append(skeleton_block)
+
+        skeletons = np.stack(skeleton_blocks, axis=0)
+
+        return skeletons
+
+
+    def get_ds_for_eval(self, train, condtion_length, test_length):
+        # use eval config described on experiment protocol page
+        if train:
+            vids = self.videos[~self.videos.is_val]
+        else:
+            vids = self.videos[self.videos.is_val]
+
+        raise NotImplementedError()
+
+        # TODO: update to match new validation setup
+        # TODO: factor out whatever is common between this and seq2d
+        seq_skip = self.seq_skip
+        completion_length = self.completion_length
+        assert completion_length > 0
+
+        out_seqs = []
+
+        for vid_idx in vids.index:
+            norm_skeletons = vids['skeletons'][vid_idx]
+            vid_name = vids['vid_name'][vid_idx]
+
+            range_bound = 1 + len(norm_skeletons) - seq_skip * completion_length
+            block_skip = seq_skip * completion_length
+
+            for i in range(0, range_bound, block_skip):
+                endpoint = i + seq_skip * completion_length
+                skeleton_block = norm_skeletons[i:endpoint:seq_skip]
+                assert len(skeleton_block) == completion_length, \
+                    skeleton_block.shape
+                completion_block = {
+                    'skeletons': skeleton_block,
+                    'vid_name': vid_name,
+                    'start': i,
+                    'stop': endpoint,
+                    'skip': seq_skip,
+                }
+                out_seqs.append(completion_block)
+
+        return out_seqs
