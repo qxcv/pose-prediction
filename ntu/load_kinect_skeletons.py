@@ -95,8 +95,7 @@ def load_skeletons(data):
             num_joints = fline('i', data)
             skelarray = np.recarray((num_joints, ), dtype=joints_dtype)
             for joint_num in range(num_joints):
-                skelarray[joint_num] = np.asarray(
-                    fline('f' * 11 + 'i', data), dtype='object')
+                skelarray[joint_num] = tuple(fline('f' * 11 + 'i', data))
             d['skeleton'] = skelarray
             bodies.append(Skeleton(**d))
         frames.append(bodies)

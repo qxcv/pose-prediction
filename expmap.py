@@ -95,7 +95,7 @@ def xyz_to_expmap(xyz_seq, parents):
             parent_bones[:, 1] = -1
         else:
             # we actually have a parent bone :)
-            parent_bones = xyz_seq[:, parent] - xyz_seq[:, child]
+            parent_bones = xyz_seq[:, grandparent] - xyz_seq[:, parent]
 
         # normalise parent and child bones
         norm_bones = _norm_bvecs(bones)
@@ -115,9 +115,28 @@ def xyz_to_expmap(xyz_seq, parents):
     return exp_seq
 
 
-def expmap_to_xyz(exp_seq, parents):
+def exp_to_rotmat(exp):
+    """Convert rotation paramterised as exponential map into ordinary 3x3
+    rotation matrix."""
+    assert exp.shape == (3,), "was expecting expmap vector"
+
+    # begin by normalising all exps
+    angle = np.linalg.norm(exp)
+    if angle < 1e-5:
+        # assume no rotation
+        return np.eye(3)
+    dir = exp / angle
+
+    # Rodrigues' formula, matrix edition
+    K = np.array([[0, -dir[2], dir[1]],
+                  [dir[2], 0, -dir[0]],
+                  [-dir[1], dir[0], 0]])
+    return np.eye(3) + np.sin(angle)*K + (1 - np.cos(angle))*K@K
+
+
+def expmap_to_xyz(exp_seq, parents, bone_lengths):
     """Inverse of xyz_to_expmap. Won't be able to recover initial offset."""
-    assert exp_seq.ndim == 3 and exp_seq.shape[2] == 3, \
+    assert exp_seq.ndim >= 2 and exp_seq.shape[-1] == 3, \
         "Wanted TxJx3 array containing T expmap skeletons, each with J dirs."
 
     toposorted = toposort(parents)
@@ -127,6 +146,31 @@ def expmap_to_xyz(exp_seq, parents):
     # restore head first
     xyz_seq[:, root, :] = np.cumsum(exp_seq[:, root, :], axis=1)
 
-    raise NotImplementedError('Need to finish this')
+    # simultaneously recover bones (normalised offset from parent) and original
+    # coordinates
+    bones = np.zeros_like(exp_seq)
+    bones[:, root, 1] = -1
+    for child in toposorted[1:]:
+        parent = parents[child]
+        parent_bone = bones[:, parent, :]
+        exps = exp_seq[:, child, :]
+        for t in range(len(exp_seq)):
+            # might be able to vectorise this, but may take too long to justify
+            R = exp_to_rotmat(exps[t])
+            bones[t, child] = R@parent_bone[t]
+        scaled_child_bones = bones[:, child] * bone_lengths[child]
+        xyz_seq[:, child] = xyz_seq[:, parent] + scaled_child_bones
 
     return xyz_seq
+
+
+def plot_xyz_skeleton(skeleton_xyz, parents, mp3d_axes):
+    """Plot an xyz-parameterised skeleton using some given Matplotlib 3D
+    axes."""
+    assert skeleton_xyz.shape == (len(parents), 3), "need J*3 coords matrix"
+    toposorted = toposort(parents)
+    for child in toposorted[1:]:
+        parent = parents[child]
+        coords = skeleton_xyz[[parent, child], :]
+        print(coords)
+        mp3d_axes.plot(coords[:, 0], coords[:, 1], zs=coords[:, 2])
