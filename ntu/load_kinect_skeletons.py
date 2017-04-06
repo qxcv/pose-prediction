@@ -143,9 +143,9 @@ def extract_tracks(frames, min_length=15):
             awful_joints = sum(joint.track_state < TrackState.INFERRED
                                for joint in body.skeleton)
             skel_below = body.track_state < TrackState.TRACKED
-            locs = np.concatenate([body.skeleton.colour_x, body.skeleton_colour_y])
-            too_big = np.any(np.abs(locs) > 1e4)
-            if skel_below or baddish_joints > 3 or awful_joints > 0 or too_big:
+            locs = np.concatenate([body.skeleton.colour_x, body.skeleton.colour_y])
+            too_big = np.any(~np.isfinite(locs)) or np.any((locs > 1e4) | (locs < -1e3))
+            if skel_below or baddish_joints > 12 or awful_joints > 0 or too_big:
                 num_discarded += 1
                 # Debug prints
                 # js = '%d untracked joints' % joints_below
