@@ -10,6 +10,9 @@ import pandas as pd
 def gauss_filter(seq, sigma, filter_width=None):
     """Filter a 2D signal, where first dimension is time, and second is data
     channels."""
+    if len(seq) <= 1:
+        # can't do any meaningful filtering
+        return seq
     if filter_width is None:
         filter_width = int(np.ceil(4 * sigma))
         if (filter_width % 2) == 0:
@@ -197,24 +200,12 @@ def _runs(vec):
     return list(zip(act_vals, run_starts, run_stops))
 
 
-def _train_test_split(vid_names, val_frac):
-    # copy list so we can shuffle
-    vid_list = list(vid_names)
-    val_srng = np.random.RandomState(seed=8904511)
-    val_srng.shuffle(vid_list)
-    val_count = max(1, int(val_frac * len(vid_list)))
-    val_vids = set(vid_list[:val_count])
-    train_vids = set(vid_list) - val_vids
-    return train_vids, val_vids
-
-
 class P2DDataset(object):
     def __init__(self,
                  data_file_path,
                  seq_length,
                  seq_skip,
                  gap=1,
-                 val_frac=0.2,
                  have_actions=True,
                  completion_length=None,
                  relative=True,
@@ -230,7 +221,6 @@ class P2DDataset(object):
         :param seq_skip: How many (original) frames apart each pose should be
             in an output sequence.
         :param gap: How far to skip forward between each sampled sequence.
-        :param val_frac: Percentage of dataset to use as validation data.
         :param have_actions: Should actions actually be returned?
         :param completion_length: Number of sequential poses to use in
             completion problems. Set to None to disable.
@@ -246,7 +236,6 @@ class P2DDataset(object):
         self.seq_length = seq_length
         self.seq_skip = seq_skip
         self.gap = gap
-        self.val_frac = val_frac
         self.have_actions = have_actions
         self.relative = relative
         self.remove_head = remove_head
@@ -282,8 +271,6 @@ class P2DDataset(object):
                 self.action_names = None
 
             vid_names = list(fp['seqs'])
-            self.train_vids, self.val_vids \
-                = _train_test_split(vid_names, self.val_frac)
 
             for vid_name in fp['seqs']:
                 sfact_path = '/seqs/' + vid_name + '/scale'
@@ -294,6 +281,9 @@ class P2DDataset(object):
 
                 orig_poses = fp['/seqs/' + vid_name + '/poses'].value
                 orig_poses = orig_poses.astype('float32') / seq_scale
+                if np.any(np.isnan(orig_poses)) or np.any(np.abs(orig_poses) > 1e5):
+                    print('Rejecting %s (invalid or too big)' % vid_name)
+                    continue
                 # don't both with relative poses
                 norm_poses, pp_offset, pp_scale = preprocess_sequence(
                     orig_poses,
@@ -322,13 +312,15 @@ class P2DDataset(object):
                 else:
                     mask = np.ones_like(norm_poses, dtype='float32')
 
+                is_train = fp['/seqs/' + vid_name + '/is_train']
+
                 vid_meta = {
                     'pp_offset': pp_offset,
                     'pp_scale': pp_scale,
                     'poses': norm_poses,
                     'vid_name': vid_name,
                     'mask': mask,
-                    'is_val': vid_name in self.val_vids,
+                    'is_val': not is_train,
                     'seq_scale': seq_scale
                 }
                 if self.have_actions:
@@ -624,9 +616,8 @@ class P3DDataset(object):
     because it doesn't need to deal with preprocessing, joint validity
     (everything is assumed okay) or actions."""
 
-    def __init__(self, data_file_path, frame_skip, val_frac=0.2):
+    def __init__(self, data_file_path, frame_skip):
         self.data_file_path = data_file_path
-        self.val_frac = val_frac
         self.frame_skip = frame_skip
         videos_list = []
 

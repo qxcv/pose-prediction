@@ -73,14 +73,15 @@ def rescale(skeletons_2d):
     snd_dists = np.linalg.norm(
         skeletons_2d[..., LHIP_ID] - skeletons_2d[..., RSHOL_ID], axis=1)
     scale = np.median(np.concatenate([fst_dists, snd_dists]))
-    # TODO: fix scale thing for small items
-    if scale <= 1e-5:
-        scale = 1
+    assert not np.isnan(scale)
+    # TODO: I think something is messing up here. Am I getting NaNs somehow?
+    if scale <= 1:
+        scale = None
 
     # Corresponds to Top of head, Neck, Right shoulder, Right elbow, Right
     # wrist, Left shoulder, Left elbow, Left wrist (CPM)
     trimmed_skeleton = skeletons_2d[:, :, TO_KEEP_INDS]
-    return trimmed_skeleton / scale, scale
+    return trimmed_skeleton, scale
 
 
 def h5_json_encode(data):
@@ -134,12 +135,13 @@ if __name__ == '__main__':
                     [track.skeletons.colour_x, track.skeletons.colour_y],
                     axis=1)
                 scaled_skels, scale = rescale(skeleton_xy)
+                if scale is None:
+                    # too small, or otherwise invalid
+                    continue
                 num_frames = len(skeleton_xy)
                 action_vec = np.full((num_frames, ), action_id).astype('uint8')
                 out_fp[prefix + 'poses'] = scaled_skels.astype('float32')
                 out_fp[prefix + 'actions'] = action_vec
-                out_fp[prefix + 'valid'] = np.ones_like(skeleton_xy) \
-                                             .astype('uint8')
                 out_fp[prefix + 'scale'] = scale
                 out_fp[prefix + 'is_train'] = is_train
 

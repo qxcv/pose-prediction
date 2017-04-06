@@ -12,6 +12,8 @@ from h5py import File
 import numpy as np
 from spacepy import pycdf
 
+from expmap import xyz_to_expmap, bone_lengths
+
 # CPM joints: head, neck, right shoulder/elbow/wrist (PC), left
 # shoulder/elbow/wrist (PC)
 TO_CPM = [15, 13, 25, 26, 27, 17, 18, 19]
