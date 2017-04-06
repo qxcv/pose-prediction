@@ -86,3 +86,44 @@ fwd {port, stbd} if it all goes south).
 31: ?? hand (right) --> Dupe of 32? Unreliable?
 32: ?? hand (right) --> Dupe of 31? Unreliable?
 ```
+
+**Update:** Joint information can be read from `metadata.xml` file shipped
+with H3.6M devkit! Here's a hierarchy I produced for the 3D skeleton:
+
+```
+| Hips
+  | RightUpLeg
+    | RightLeg
+      | RightFoot
+        | RightToeBase
+          | SiteRightToeBase
+  | LeftUpLeg
+    | LeftLeg
+      | LeftFoot
+        | LeftToeBase
+          | SiteLeftToeBase
+  | Spine
+    | Spine1
+      | Neck
+        | Head
+          | SiteHead
+      | LeftShoulder
+        | LeftArm
+          | LeftForeArm
+            | LeftHand
+              | LeftHandThumb
+                | SiteLeftHandThumb
+              | L_Wrist_End
+                | SiteL_Wrist_End
+      | RightShoulder
+        | RightArm
+          | RightForeArm
+            | RightHand
+              | RightHandThumb
+                | SiteRightHandThumb
+              | R_Wrist_End
+                | SiteR_Wrist_End
+```
+
+No indices, sorry, but you can still get the musing the 'meta' script in
+`h36m/`.

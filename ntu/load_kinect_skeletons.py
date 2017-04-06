@@ -125,7 +125,7 @@ def _finalise_tracks(now_tracking, keys_to_remove, out_tracks, end_frame,
         del now_tracking[key]
 
 
-def extract_tracks(frames, min_length=1):
+def extract_tracks(frames, min_length=15):
     """Turn per-frame skeleton representation into a list of frame tracks.
     Tracks start when an untracked skeleton appears, and end when the skeleton
     disapppears for one or more frames."""
@@ -135,12 +135,17 @@ def extract_tracks(frames, min_length=1):
     for frame_num, frame in enumerate(frames):
         seen = set()
         for body in frame:
-            # throw out skeletons which are not tracked as a whole, or which
-            # have untracked joints
-            joints_below = sum(joint.track_state < TrackState.INFERRED for
-                               joint in body.skeleton)
+            # Cruft sifting! Throw out skeletons which are not tracked as a
+            # whole, or which have lots of inferred joints, or which have some
+            # untracked joints, OR which are just ridiculously large.
+            baddish_joints = sum(joint.track_state < TrackState.TRACKED
+                                 for joint in body.skeleton)
+            awful_joints = sum(joint.track_state < TrackState.INFERRED
+                               for joint in body.skeleton)
             skel_below = body.track_state < TrackState.TRACKED
-            if skel_below or joints_below > 0:
+            locs = np.concatenate([body.skeleton.colour_x, body.skeleton_colour_y])
+            too_big = np.any(np.abs(locs) > 1e4)
+            if skel_below or baddish_joints > 3 or awful_joints > 0 or too_big:
                 num_discarded += 1
                 # Debug prints
                 # js = '%d untracked joints' % joints_below
