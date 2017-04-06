@@ -99,7 +99,7 @@ if __name__ == '__main__':
     with ZipFile(args.ntu_path) as in_fp, h5py.File(args.dest, 'w') as out_fp:
         all_bone_lengths = []
 
-        tq_iter = tqdm(in_fp.namelist()[:2], smoothing=0.005, postfix={'drop': 0})
+        tq_iter = tqdm(in_fp.namelist(), smoothing=0.005, postfix={'drop': 0})
         dropped = 0
         for seq_path in tq_iter:
             if not seq_path.endswith('.skeleton'):
