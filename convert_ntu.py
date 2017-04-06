@@ -12,7 +12,8 @@ import numpy as np
 from tqdm import tqdm
 
 from ntu import (ACTION_CLASSES, BAD_IDENTIFIERS, load_skeletons,
-                 extract_tracks, JOINT_NAMES, JOINT_PARENT_INDS)
+                 extract_tracks, JOINT_NAMES, JOINT_PARENT_INDS,
+                 EVAL_PERFORMERS)
 from expmap import xyz_to_expmap, bone_lengths
 
 # From readme in example code repo: SsssCcccPpppRrrrAaaa. S, C, P, R and A
@@ -111,6 +112,9 @@ if __name__ == '__main__':
             ident = skelly_meta['ident']
             if ident in BAD_IDENTIFIERS:
                 continue
+            perf_id = skelly_meta['performer']
+            assert isinstance(perf_id, int) and 1 <= perf_id <= 40
+            is_train = perf_id not in EVAL_PERFORMERS
             for track in skelly_tracks:
                 # need to make sure we can recover whatever this track was in
                 # the original files
@@ -137,6 +141,7 @@ if __name__ == '__main__':
                 out_fp[prefix + 'valid'] = np.ones_like(skeleton_xy) \
                                              .astype('uint8')
                 out_fp[prefix + 'scale'] = scale
+                out_fp[prefix + 'is_train'] = is_train
 
                 # same, but for 3D data
                 prefix_3d = '/seqs3d/' + track_name + '/'
@@ -146,7 +151,11 @@ if __name__ == '__main__':
                 expmap = xyz_to_expmap(skeleton_xyz, JOINT_PARENT_INDS)
                 out_fp[prefix_3d + 'skeletons'] = expmap.astype('float32')
                 out_fp[prefix_3d + 'actions'] = action_vec
-                all_bone_lengths.append(bone_lengths(skeleton_xyz, JOINT_PARENT_INDS))
+                out_fp[prefix_3d + 'is_train'] = is_train
+
+                # average this out later for display
+                all_bone_lengths.append(
+                    bone_lengths(skeleton_xyz, JOINT_PARENT_INDS))
 
         action_names = [n for i, n in sorted(ACTION_CLASSES.items())]
         # use CPM parents
@@ -157,7 +166,8 @@ if __name__ == '__main__':
         out_fp['/joint_names_3d'] = h5_json_encode(JOINT_NAMES)
         out_fp['/parents_3d'] = np.array(JOINT_PARENT_INDS, dtype='uint8')
         # store good length for each bone just so that we can visualise motion
+        # (expmap parameterisation throws away bone length)
         all_bone_lengths = np.concatenate(all_bone_lengths, axis=0)
         const_bone_lengths = np.median(all_bone_lengths, axis=0)
-        assert const_bone_lengths.shape == (len(JOINT_PARENT_INDS),)
+        assert const_bone_lengths.shape == (len(JOINT_PARENT_INDS), )
         out_fp['/bone_lengths_3d'] = const_bone_lengths.astype('float32')
