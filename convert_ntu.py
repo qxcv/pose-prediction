@@ -99,7 +99,7 @@ if __name__ == '__main__':
     with ZipFile(args.ntu_path) as in_fp, h5py.File(args.dest, 'w') as out_fp:
         all_bone_lengths = []
 
-        tq_iter = tqdm(in_fp.namelist(), smoothing=0.005, postfix={'drop': 0})
+        tq_iter = tqdm(in_fp.namelist()[:2], smoothing=0.005, postfix={'drop': 0})
         dropped = 0
         for seq_path in tq_iter:
             if not seq_path.endswith('.skeleton'):
@@ -136,7 +136,7 @@ if __name__ == '__main__':
                 scaled_skels, scale = rescale(skeleton_xy)
                 num_frames = len(skeleton_xy)
                 action_vec = np.full((num_frames, ), action_id).astype('uint8')
-                out_fp[prefix + 'poses'] = skeleton_xy.astype('float32')
+                out_fp[prefix + 'poses'] = scaled_skels.astype('float32')
                 out_fp[prefix + 'actions'] = action_vec
                 out_fp[prefix + 'valid'] = np.ones_like(skeleton_xy) \
                                              .astype('uint8')
