@@ -579,25 +579,26 @@ class P3DDataset(object):
     """Mimics P2DDataset, but is specialised to 3D data. Much less complicated
     because it doesn't need to deal with preprocessing, joint validity
     (everything is assumed okay) or actions."""
-    def __init__(self,
-                 data_file_path,
-                 frame_skip,
-                 val_frac=0.2):
+
+    def __init__(self, data_file_path, frame_skip, val_frac=0.2):
         self.data_file_path = data_file_path
-        self.seq_skip = seq_skip
         self.val_frac = val_frac
+        self.frame_skip = frame_skip
         videos_list = []
 
         with h5py.File(data_file_path, 'r') as fp:
-            vid_names = list(fp['seqs_3d'])
+            vid_names = list(fp['seqs3d'])
             self.train_vids, self.val_vids \
                 = _train_test_split(vid_names, self.val_frac)
 
-            for vid_name in fp['seqs']:
-                skeletons = fp['/seqs/' + vid_name + '/skeletons'].value
+            for vid_name in vid_names:
+                skeletons = fp['/seqs3d/' + vid_name + '/skeletons'].value
+                skeletons_flat = skeletons \
+                    .astype('float32') \
+                    .reshape((skeletons.shape[0], -1))
 
                 vid_meta = {
-                    'skeletons': skeletons.astype('float32'),
+                    'skeletons': skeletons_flat,
                     'vid_name': vid_name,
                     'is_val': vid_name in self.val_vids,
                 }
@@ -607,7 +608,8 @@ class P3DDataset(object):
         self.videos = pd.DataFrame.from_records(videos_list)
 
         train_vids = self.videos[~self.videos.is_val]
-        flat_skeletons = np.concatenate(train_vids.skeletons.as_matrix(), axis=0)
+        flat_skeletons = np.concatenate(
+            train_vids.skeletons.as_matrix(), axis=0)
         assert flat_skeletons.ndim == 2, flat_skeletons.shape
         self.mean = flat_skeletons.mean(axis=0).reshape((1, -1))
         self.std = flat_skeletons.std(axis=0).reshape((1, -1))
@@ -618,31 +620,44 @@ class P3DDataset(object):
 
         self.dim_obs = self.mean.size
 
-    def get_ds_for_train(self, train, seq_length, seq_gap):
+    def get_ds_for_train(self, train, seq_length, gap, discard_shorter):
         if train:
             vids = self.videos[~self.videos.is_val]
         else:
             vids = self.videos[self.videos.is_val]
 
-        raise NotImplementedError()
-
-        seq_skip = self.seq_skip
-
+        frame_skip = self.frame_skip
         skeleton_blocks = []
+        mask_blocks = []
 
         for vid_idx in vids.index:
             vid_skeletons = vids['skeletons'][vid_idx]
-
-            range_count = len(vid_skeletons) - seq_skip * seq_length + 1
+            range_count = len(vid_skeletons) - frame_skip * discard_shorter + 1
 
             for i in range(0, range_count, gap):
-                skeleton_block = vid_skeletons[i:i + seq_skip * seq_length:seq_skip]
-                skeleton_blocks.append(skeleton_block)
+                end = min(len(vid_skeletons), i + frame_skip * seq_length)
+                skeleton_block = vid_skeletons[i:end:frame_skip]
+                block_length = len(skeleton_block)
+                assert block_length <= seq_length
+                pads = [(0, seq_length - block_length), (0, 0)]
+                skeleton_block_padded = np.pad(
+                    skeleton_block, pads, mode='constant')
+                assert np.all(
+                    skeleton_block_padded[:block_length] == skeleton_block)
+                skeleton_blocks.append(skeleton_block_padded)
+
+                # fill out the sequence with some masked time steps
+                mask_block = np.zeros_like(skeleton_block)
+                mask_block[:block_length] = 1
+                mask_blocks.append(mask_block)
 
         skeletons = np.stack(skeleton_blocks, axis=0)
+        masks = np.stack(mask_blocks, axis=0)
+        assert skeletons.ndim == 3 and skeletons.shape[1] == seq_length, \
+            skeletons.shape
+        assert skeletons.shape == masks.shape, (skeletons.shape, masks.shape)
 
-        return skeletons
-
+        return skeletons, masks
 
     def get_ds_for_eval(self, train, condtion_length, test_length):
         # use eval config described on experiment protocol page
@@ -655,7 +670,7 @@ class P3DDataset(object):
 
         # TODO: update to match new validation setup
         # TODO: factor out whatever is common between this and seq2d
-        seq_skip = self.seq_skip
+        frame_skip = self.frame_skip
         completion_length = self.completion_length
         assert completion_length > 0
 
@@ -665,12 +680,13 @@ class P3DDataset(object):
             norm_skeletons = vids['skeletons'][vid_idx]
             vid_name = vids['vid_name'][vid_idx]
 
-            range_bound = 1 + len(norm_skeletons) - seq_skip * completion_length
-            block_skip = seq_skip * completion_length
+            range_bound = 1 + len(
+                norm_skeletons) - frame_skip * completion_length
+            block_skip = frame_skip * completion_length
 
             for i in range(0, range_bound, block_skip):
-                endpoint = i + seq_skip * completion_length
-                skeleton_block = norm_skeletons[i:endpoint:seq_skip]
+                endpoint = i + frame_skip * completion_length
+                skeleton_block = norm_skeletons[i:endpoint:frame_skip]
                 assert len(skeleton_block) == completion_length, \
                     skeleton_block.shape
                 completion_block = {
@@ -678,7 +694,7 @@ class P3DDataset(object):
                     'vid_name': vid_name,
                     'start': i,
                     'stop': endpoint,
-                    'skip': seq_skip,
+                    'skip': frame_skip,
                 }
                 out_seqs.append(completion_block)
 
