@@ -137,7 +137,7 @@ def extract_tracks(frames, min_length=1):
         for body in frame:
             # throw out skeletons which are not tracked as a whole, or which
             # have untracked joints
-            joints_below = sum(joint.track_state < TrackState.TRACKED for
+            joints_below = sum(joint.track_state < TrackState.INFERRED for
                                joint in body.skeleton)
             skel_below = body.track_state < TrackState.TRACKED
             if skel_below or joints_below > 0:
