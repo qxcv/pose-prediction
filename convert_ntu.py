@@ -156,8 +156,8 @@ if __name__ == '__main__':
 
         out_fp['/joint_names_3d'] = h5_json_encode(JOINT_NAMES)
         out_fp['/parents_3d'] = np.array(JOINT_PARENT_INDS, dtype='uint8')
-        # store mean length for each bone just so that we can visualise motion
+        # store good length for each bone just so that we can visualise motion
         all_bone_lengths = np.concatenate(all_bone_lengths, axis=0)
-        mean_bone_lengths = all_bone_lengths.mean(axis=0)
-        assert mean_bone_lengths.shape == (len(JOINT_PARENT_INDS),)
-        out_fp['/bone_lengths_3d'] = mean_bone_lengths.astype('float32')
+        const_bone_lengths = np.median(all_bone_lengths, axis=0)
+        assert const_bone_lengths.shape == (len(JOINT_PARENT_INDS),)
+        out_fp['/bone_lengths_3d'] = const_bone_lengths.astype('float32')

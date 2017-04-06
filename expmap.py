@@ -118,7 +118,7 @@ def xyz_to_expmap(xyz_seq, parents):
 def exp_to_rotmat(exp):
     """Convert rotation paramterised as exponential map into ordinary 3x3
     rotation matrix."""
-    assert exp.shape == (3,), "was expecting expmap vector"
+    assert exp.shape == (3, ), "was expecting expmap vector"
 
     # begin by normalising all exps
     angle = np.linalg.norm(exp)
@@ -131,7 +131,7 @@ def exp_to_rotmat(exp):
     K = np.array([[0, -dir[2], dir[1]],
                   [dir[2], 0, -dir[0]],
                   [-dir[1], dir[0], 0]])
-    return np.eye(3) + np.sin(angle)*K + (1 - np.cos(angle))*K@K
+    return np.eye(3) + np.sin(angle) * K + (1 - np.cos(angle)) * K @ K
 
 
 def expmap_to_xyz(exp_seq, parents, bone_lengths):
@@ -157,7 +157,7 @@ def expmap_to_xyz(exp_seq, parents, bone_lengths):
         for t in range(len(exp_seq)):
             # might be able to vectorise this, but may take too long to justify
             R = exp_to_rotmat(exps[t])
-            bones[t, child] = R@parent_bone[t]
+            bones[t, child] = R @ parent_bone[t]
         scaled_child_bones = bones[:, child] * bone_lengths[child]
         xyz_seq[:, child] = xyz_seq[:, parent] + scaled_child_bones
 
@@ -168,9 +168,37 @@ def plot_xyz_skeleton(skeleton_xyz, parents, mp3d_axes):
     """Plot an xyz-parameterised skeleton using some given Matplotlib 3D
     axes."""
     assert skeleton_xyz.shape == (len(parents), 3), "need J*3 coords matrix"
+
+    mp3d_axes.set_aspect('equal')
+
     toposorted = toposort(parents)
     for child in toposorted[1:]:
         parent = parents[child]
         coords = skeleton_xyz[[parent, child], :]
-        print(coords)
-        mp3d_axes.plot(coords[:, 0], coords[:, 1], zs=coords[:, 2])
+        mp3d_axes.plot(coords[:, 0], coords[:, 1], zs=coords[:, 2], zdir='y')
+
+    mp3d_axes.set_xlabel('x')
+    mp3d_axes.set_ylabel('y')
+    mp3d_axes.set_zlabel('z')
+
+    # ridiculous trick from http://stackoverflow.com/a/21765085
+    # draws a box around the data so that matplot3d uses equal aspect ratio
+    x_max, x_min = skeleton_xyz[:, 0].max(), skeleton_xyz[:, 0].min()
+    y_max, y_min = skeleton_xyz[:, 1].max(), skeleton_xyz[:, 1].min()
+    z_max, z_min = skeleton_xyz[:, 2].max(), skeleton_xyz[:, 2].min()
+    # swap z/y
+    max_range = max([x_max - x_min, y_max - y_min, z_max - z_min]) / 2.0
+
+    mid_x = (x_max + x_min) * 0.5
+    mid_y = (y_max + y_min) * 0.5
+    mid_z = (z_max + z_min) * 0.5
+    mp3d_axes.set_xlim(mid_x - max_range, mid_x + max_range)
+    # swap y/z because zdir='y'
+    mp3d_axes.set_zlim(mid_y - max_range, mid_y + max_range)
+    mp3d_axes.set_ylim(mid_z - max_range, mid_z + max_range)
+
+    # look at person from above
+    mp3d_axes.elev = 30
+    mp3d_axes.azim = 60
+
+    mp3d_axes.invert_zaxis()
