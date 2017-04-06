@@ -355,6 +355,50 @@ class P2DDataset(object):
 
         self.dim_obs = self.mean.size
 
+    def get_ds_for_train(self, train, seq_length, gap, discard_shorter):
+        if train:
+            vids = self.videos[~self.videos.is_val]
+        else:
+            vids = self.videos[self.videos.is_val]
+
+        frame_skip = self.seq_skip
+        pose_blocks = []
+        mask_blocks = []
+
+        for vid_idx in vids.index:
+            vid_poses = vids['poses'][vid_idx]
+            vid_masks = vids['mask'][vid_idx]
+            range_count = len(vid_poses) - frame_skip * discard_shorter + 1
+
+            for i in range(0, range_count, gap):
+                end = min(len(vid_poses), i + frame_skip * seq_length)
+                pose_block = vid_poses[i:end:frame_skip]
+                block_length = len(pose_block)
+                assert block_length <= seq_length
+                pads = [(0, seq_length - block_length), (0, 0)]
+                pose_block_padded = np.pad(
+                    pose_block, pads, mode='constant').astype('float32')
+                assert np.all(pose_block_padded[:block_length] == pose_block)
+                pose_blocks.append(pose_block_padded)
+
+                # fill out the sequence with some masked time steps
+                mask_block = vid_masks[i:end:frame_skip]
+                pads = [(0, seq_length - block - length)] \
+                       + [(0, 0)] * (mask_block.ndim - 1)
+                mask_block_padded = np.pad(
+                    mask_block, pads, mode='constant', constant_values=0)
+                mask_blocks.append(mask_block.astype('float32'))
+
+        poses = np.stack(pose_blocks, axis=0)
+        del pose_blocks
+        masks = np.stack(mask_blocks, axis=0)
+        del mask_blocks
+        assert poses.ndim == 3 and poses.shape[1] == seq_length, \
+            poses.shape
+        assert poses.shape == masks.shape, (poses.shape, masks.shape)
+
+        return poses, masks
+
     def get_pose_ds(self, train):
         # poses should be N*T*D, actions should be N*T*A if they exist
         # (one-hot), mask should be N*T*D
@@ -588,19 +632,18 @@ class P3DDataset(object):
 
         with h5py.File(data_file_path, 'r') as fp:
             vid_names = list(fp['seqs3d'])
-            self.train_vids, self.val_vids \
-                = _train_test_split(vid_names, self.val_frac)
 
             for vid_name in vid_names:
                 skeletons = fp['/seqs3d/' + vid_name + '/skeletons'].value
                 skeletons_flat = skeletons \
                     .astype('float32') \
                     .reshape((skeletons.shape[0], -1))
+                is_train = fp['/seqs3d/' + vid_name + '/is_train'].value
 
                 vid_meta = {
                     'skeletons': skeletons_flat,
                     'vid_name': vid_name,
-                    'is_val': vid_name in self.val_vids,
+                    'is_val': not is_train
                 }
 
                 videos_list.append(vid_meta)
@@ -641,18 +684,21 @@ class P3DDataset(object):
                 assert block_length <= seq_length
                 pads = [(0, seq_length - block_length), (0, 0)]
                 skeleton_block_padded = np.pad(
-                    skeleton_block, pads, mode='constant')
+                    skeleton_block, pads, mode='constant').astype('float32')
                 assert np.all(
                     skeleton_block_padded[:block_length] == skeleton_block)
                 skeleton_blocks.append(skeleton_block_padded)
 
                 # fill out the sequence with some masked time steps
-                mask_block = np.zeros_like(skeleton_block)
+                mask_block = np.zeros_like(
+                    skeleton_block_padded, dtype='float32')
                 mask_block[:block_length] = 1
                 mask_blocks.append(mask_block)
 
         skeletons = np.stack(skeleton_blocks, axis=0)
+        del skeleton_blocks
         masks = np.stack(mask_blocks, axis=0)
+        del mask_blocks
         assert skeletons.ndim == 3 and skeletons.shape[1] == seq_length, \
             skeletons.shape
         assert skeletons.shape == masks.shape, (skeletons.shape, masks.shape)
