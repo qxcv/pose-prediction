@@ -14,7 +14,7 @@ def gauss_filter(seq, sigma, filter_width=None):
         # can't do any meaningful filtering
         return seq
     if filter_width is None:
-        filter_width = int(np.ceil(4 * sigma))
+        filter_width = min(int(np.ceil(4 * sigma)), len(seq))
         if (filter_width % 2) == 0:
             # make it odd-length (not sure how things work with even-length
             # filters, TBH)
@@ -272,7 +272,7 @@ class P2DDataset(object):
 
             vid_names = list(fp['seqs'])
 
-            for vid_name in fp['seqs']:
+            for vid_name in vid_names:
                 sfact_path = '/seqs/' + vid_name + '/scale'
                 if sfact_path in fp:
                     seq_scale = fp[sfact_path].value
@@ -281,7 +281,8 @@ class P2DDataset(object):
 
                 orig_poses = fp['/seqs/' + vid_name + '/poses'].value
                 orig_poses = orig_poses.astype('float32') / seq_scale
-                if np.any(np.isnan(orig_poses)) or np.any(np.abs(orig_poses) > 1e5):
+                if np.any(np.isnan(orig_poses)) or np.any(
+                        np.abs(orig_poses) > 1e5):
                     print('Rejecting %s (invalid or too big)' % vid_name)
                     continue
                 # don't both with relative poses
@@ -312,7 +313,7 @@ class P2DDataset(object):
                 else:
                     mask = np.ones_like(norm_poses, dtype='float32')
 
-                is_train = fp['/seqs/' + vid_name + '/is_train']
+                is_train = fp['/seqs/' + vid_name + '/is_train'].value
 
                 vid_meta = {
                     'pp_offset': pp_offset,
@@ -368,18 +369,20 @@ class P2DDataset(object):
                 block_length = len(pose_block)
                 assert block_length <= seq_length
                 pads = [(0, seq_length - block_length), (0, 0)]
-                pose_block_padded = np.pad(
-                    pose_block, pads, mode='constant').astype('float32')
+                pose_block_padded = np.pad(pose_block, pads,
+                                           mode='constant').astype('float32')
                 assert np.all(pose_block_padded[:block_length] == pose_block)
                 pose_blocks.append(pose_block_padded)
 
                 # fill out the sequence with some masked time steps
                 mask_block = vid_masks[i:end:frame_skip]
-                pads = [(0, seq_length - block - length)] \
-                       + [(0, 0)] * (mask_block.ndim - 1)
-                mask_block_padded = np.pad(
-                    mask_block, pads, mode='constant', constant_values=0)
-                mask_blocks.append(mask_block.astype('float32'))
+                pads = [(0, seq_length - block_length)] \
+                    + [(0, 0)] * (mask_block.ndim - 1)
+                mask_block_padded = np.pad(mask_block,
+                                           pads,
+                                           mode='constant',
+                                           constant_values=0)
+                mask_blocks.append(mask_block_padded.astype('float32'))
 
         poses = np.stack(pose_blocks, axis=0)
         del pose_blocks
