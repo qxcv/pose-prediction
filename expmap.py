@@ -128,8 +128,7 @@ def exp_to_rotmat(exp):
     dir = exp / angle
 
     # Rodrigues' formula, matrix edition
-    K = np.array([[0, -dir[2], dir[1]],
-                  [dir[2], 0, -dir[0]],
+    K = np.array([[0, -dir[2], dir[1]], [dir[2], 0, -dir[0]],
                   [-dir[1], dir[0], 0]])
     return np.eye(3) + np.sin(angle) * K + (1 - np.cos(angle)) * K @ K
 
@@ -164,41 +163,54 @@ def expmap_to_xyz(exp_seq, parents, bone_lengths):
     return xyz_seq
 
 
-def plot_xyz_skeleton(skeleton_xyz, parents, mp3d_axes):
+def plot_xyz_skeleton(skeleton_xyz, parents, mp3d_axes, handles=None):
     """Plot an xyz-parameterised skeleton using some given Matplotlib 3D
-    axes."""
+    axes. Will return old handles, which can be used to """
     assert skeleton_xyz.shape == (len(parents), 3), "need J*3 coords matrix"
-
-    mp3d_axes.set_aspect('equal')
-
     toposorted = toposort(parents)
-    for child in toposorted[1:]:
-        parent = parents[child]
-        coords = skeleton_xyz[[parent, child], :]
-        mp3d_axes.plot(coords[:, 0], coords[:, 1], zs=coords[:, 2], zdir='y')
 
-    mp3d_axes.set_xlabel('x')
-    mp3d_axes.set_ylabel('y')
-    mp3d_axes.set_zlabel('z')
+    if handles is None:
+        handles = []
+        mp3d_axes.set_aspect('equal')
+        for child in toposorted[1:]:
+            parent = parents[child]
+            coords = skeleton_xyz[[parent, child], :]
+            h, = mp3d_axes.plot(
+                coords[:, 0], coords[:, 1], zs=coords[:, 2], zdir='y')
+            handles.append(h)
 
-    # ridiculous trick from http://stackoverflow.com/a/21765085
-    # draws a box around the data so that matplot3d uses equal aspect ratio
-    x_max, x_min = skeleton_xyz[:, 0].max(), skeleton_xyz[:, 0].min()
-    y_max, y_min = skeleton_xyz[:, 1].max(), skeleton_xyz[:, 1].min()
-    z_max, z_min = skeleton_xyz[:, 2].max(), skeleton_xyz[:, 2].min()
-    # swap z/y
-    max_range = max([x_max - x_min, y_max - y_min, z_max - z_min]) / 2.0
+        mp3d_axes.set_xlabel('x')
+        mp3d_axes.set_ylabel('y')
+        mp3d_axes.set_zlabel('z')
 
-    mid_x = (x_max + x_min) * 0.5
-    mid_y = (y_max + y_min) * 0.5
-    mid_z = (z_max + z_min) * 0.5
-    mp3d_axes.set_xlim(mid_x - max_range, mid_x + max_range)
-    # swap y/z because zdir='y'
-    mp3d_axes.set_zlim(mid_y - max_range, mid_y + max_range)
-    mp3d_axes.set_ylim(mid_z - max_range, mid_z + max_range)
+        # ridiculous trick from http://stackoverflow.com/a/21765085
+        # draws a box around the data so that matplot3d uses equal aspect ratio
+        x_max, x_min = skeleton_xyz[:, 0].max(), skeleton_xyz[:, 0].min()
+        y_max, y_min = skeleton_xyz[:, 1].max(), skeleton_xyz[:, 1].min()
+        z_max, z_min = skeleton_xyz[:, 2].max(), skeleton_xyz[:, 2].min()
+        # swap z/y
+        max_range = max([x_max - x_min, y_max - y_min, z_max - z_min]) / 2.0
 
-    # look at person from above
-    mp3d_axes.elev = 30
-    mp3d_axes.azim = 60
+        mid_x = (x_max + x_min) * 0.5
+        mid_y = (y_max + y_min) * 0.5
+        mid_z = (z_max + z_min) * 0.5
+        mp3d_axes.set_xlim(mid_x - max_range, mid_x + max_range)
+        # swap y/z because zdir='y'
+        mp3d_axes.set_zlim(mid_y - max_range, mid_y + max_range)
+        mp3d_axes.set_ylim(mid_z - max_range, mid_z + max_range)
 
-    mp3d_axes.invert_zaxis()
+        # look at person from above
+        mp3d_axes.elev = 30
+        mp3d_axes.azim = 60
+
+        mp3d_axes.invert_zaxis()
+    else:
+        for handle, child in zip(handles, toposorted[1:]):
+            parent = parents[child]
+            coords = skeleton_xyz[[parent, child], :]
+            handle.set_xdata(coords[:, 0])
+            handle.set_ydata(coords[:, 1])
+            # there's no set_zdata for some reason :/
+            handle.set_3d_properties(zs=coords[:, 2], zdir='y')
+
+    return handles

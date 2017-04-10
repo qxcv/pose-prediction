@@ -6,14 +6,17 @@
 /h3.6m
 /new-poses/
 /ref/
-/todo.txt
 /keras/h36m-3d-poses/
 /penn
 *.h5
-.ipynb_checkpoints/
+*.npz
+
+# Python cruft
 __pycache__/
+*.pyc
 
 # Editor cruft
 *.swp
 *~
 .#*
+.ipynb_checkpoints/
