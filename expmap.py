@@ -130,7 +130,7 @@ def exp_to_rotmat(exp):
     # Rodrigues' formula, matrix edition
     K = np.array([[0, -dir[2], dir[1]], [dir[2], 0, -dir[0]],
                   [-dir[1], dir[0], 0]])
-    return np.eye(3) + np.sin(angle) * K + (1 - np.cos(angle)) * K @ K
+    return np.eye(3) + np.sin(angle) * K + (1 - np.cos(angle)) * np.dot(K, K)
 
 
 def expmap_to_xyz(exp_seq, parents, bone_lengths):
@@ -156,7 +156,7 @@ def expmap_to_xyz(exp_seq, parents, bone_lengths):
         for t in range(len(exp_seq)):
             # might be able to vectorise this, but may take too long to justify
             R = exp_to_rotmat(exps[t])
-            bones[t, child] = R @ parent_bone[t]
+            bones[t, child] = np.dot(R, parent_bone[t])
         scaled_child_bones = bones[:, child] * bone_lengths[child]
         xyz_seq[:, child] = xyz_seq[:, parent] + scaled_child_bones
 
