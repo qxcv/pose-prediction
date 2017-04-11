@@ -15,6 +15,14 @@ from spacepy import pycdf
 from expmap import xyz_to_expmap, bone_lengths
 from h36m.parse_meta import joint_hierarchy as get_hierarchy_3d
 
+# 50FPS originally, so ~16.7FPS after keeping every third frame
+FRAME_SKIP = 3
+# around 3s
+CONDITION_LENGTH = 45
+# around 5s
+TEST_LENGTH = 75
+# jump forward by 1s between testing blocks
+TEST_GAP = 15
 # validate on only one subject
 VAL_SUBJECT = 5
 # CPM joints: head, neck, right shoulder/elbow/wrist (PC), left
@@ -173,6 +181,11 @@ def process_tasks(to_process, dest):
         fp['/parents'] = np.array(PARENTS, dtype=int)
         fp['/action_names'] = h5_json_encode(ACTION_NAMES)
         fp['/num_actions'] = len(ACTION_NAMES)
+
+        fp['/frame_skip'] = FRAME_SKIP
+        fp['/eval_condition_length'] = CONDITION_LENGTH
+        fp['/eval_test_length'] = TEST_LENGTH
+        fp['/eval_seq_gap'] = TEST_GAP
 
         fp['/joint_names_3d'] = h5_json_encode(JOINT_NAMES_3D)
         fp['/parents_3d'] = np.array(PARENTS_3D, dtype='uint8')

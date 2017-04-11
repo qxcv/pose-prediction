@@ -77,7 +77,7 @@ def _norm_bvecs(bvecs):
 def xyz_to_expmap(xyz_seq, parents):
     """Converts a tree of (x, y, z) positions into the parameterisation used in
     the SRNN paper, "modelling human motion with binary latent variables"
-    paper, etc. Chops off the first coordinate (not needed)."""
+    paper, etc. Stores inter-frame offset in root joint position."""
     assert xyz_seq.ndim == 3 and xyz_seq.shape[2] == 3, \
         "Wanted TxJx3 array containing T skeletons, each with J (x, y, z)s"
 
@@ -161,6 +161,83 @@ def expmap_to_xyz(exp_seq, parents, bone_lengths):
         xyz_seq[:, child] = xyz_seq[:, parent] + scaled_child_bones
 
     return xyz_seq
+
+
+def exps_to_quats(exps):
+    """Turn tensor of exponential map angles into quaternions. If using with
+    {xyz,expmap}_to_{expmap,xyz}, remember to remove root node before using
+    this!"""
+    # See
+    # https://en.wikipedia.org/wiki/Euler%E2%80%93Rodrigues_formula#Rotation_angle_and_rotation_axis
+
+    # flatten the matrix to save my own sanity (numpy Boolean array indexing is
+    # super confusing)
+    num_exps = int(np.prod(exps.shape[:-1]))
+    assert exps.shape[-1] == 3
+    exps_flat = exps.reshape((num_exps, 3))
+    rv_flat = np.zeros((num_exps, 4))
+
+    # get angles & set zero-rotation vecs to be zero-rotation quaternions (w=1)
+    angles = np.linalg.norm(exps_flat, axis=-1)
+    zero_mask = angles < 1e-5
+    rv_flat[zero_mask, 0] = 1
+
+    # everthing else gets a meaningful value
+    nonzero_mask = ~zero_mask
+    nonzero_angles = angles[nonzero_mask]
+    nonzero_exps_flat = exps_flat[nonzero_mask, :]
+    nonzero_normed = nonzero_exps_flat / nonzero_angles[..., None]
+    sines = np.sin(nonzero_angles / 2)
+    rv_flat[nonzero_mask, 0] = np.cos(nonzero_angles / 2)
+    rv_flat[nonzero_mask, 1:] = nonzero_normed * sines[..., None]
+
+    rv_shape = exps.shape[:-1] + (4, )
+    return rv_flat.reshape(rv_shape)
+
+
+def quats_to_eulers(quats):
+    """Turn tensor of quaternions into Euler angles."""
+    # See
+    # https://en.wikipedia.org/wiki/Conversion_between_quaternions_and_Euler_angles#Quaternion_to_Euler_Angles_Conversion
+    # This formula is ZYX/yaw-pitch-roll (which I understand to be a Tait-Bryan
+    # layout?)
+    rv_shape = quats.shape[:-1] + (3, )
+    rv = np.zeros(rv_shape)
+    # split out for convenience
+    q0, q1, q2, q3 = [quats[..., i] for i in range(4)]
+    rv[..., 0] = np.arctan2(2 * (q0 * q1 + q2 * q3), 1 - 2 * (q1**2 + q2**2))
+    rv[..., 1] = np.arcsin(2 * (q0 * q2 - q1 * q3))
+    rv[..., 2] = np.arctan2(2 * (q0 * q3 + q1 * q2), 1 - 2 * (q2**2 + q3**2))
+    return rv
+
+
+def exps_to_eulers(exps):
+    return quats_to_eulers(exps_to_quats(exps))
+
+
+def test_exps_to_eulers():
+    # http://www.andre-gaschler.com/rotationconverter/ is awesome! I used it to
+    # come up with these test cases.
+    v1 = np.full((3, ), np.sqrt(3) / 3)
+    v2 = np.array([1, 0, 0])
+    v3 = np.array([0, 1, 0])
+    v4 = np.array([0, 0, -1])
+    test_cases = [(0.2 * v1, (0.1223661, 0.1082687, 0.1223661)),
+                  (-0.95 * v1, (-0.4293868, -0.6548807, -0.4293868)),
+                  (0.2 * v2, (0.2, 0, 0)), (0.3 * v3,
+                                            (0, 0.3, 0)), (0.4 * v4,
+                                                           (0, 0, -0.4))]
+    for exp, target in test_cases:
+        # test individually
+        converted = exps_to_eulers(exp)
+        assert np.allclose(converted, target)
+
+    # also test as one big matrix (with some useless dimensions) to make sure
+    # dimension handling is good
+    exp_mat = np.stack([e for e, t in test_cases], axis=0)[None, :, None, :]
+    target_mat = np.stack([t for e, t in test_cases], axis=0)[None, :, None, :]
+    converted_mat = exps_to_eulers(exp_mat)
+    assert np.allclose(converted_mat, target_mat)
 
 
 def plot_xyz_skeleton(skeleton_xyz, parents, mp3d_axes, handles=None):

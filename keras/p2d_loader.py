@@ -204,7 +204,6 @@ class P2DDataset(object):
     def __init__(self,
                  data_file_path,
                  seq_length,
-                 seq_skip,
                  gap=1,
                  have_actions=True,
                  completion_length=None,
@@ -218,8 +217,6 @@ class P2DDataset(object):
 
         :param data_file_path: Path to HDF5 file.
         :param seq_length: Length of output sequences.
-        :param seq_skip: How many (original) frames apart each pose should be
-            in an output sequence.
         :param gap: How far to skip forward between each sampled sequence.
         :param have_actions: Should actions actually be returned?
         :param completion_length: Number of sequential poses to use in
@@ -234,7 +231,6 @@ class P2DDataset(object):
         :param remove_head: Whether to remove head joint."""
         self.data_file_path = data_file_path
         self.seq_length = seq_length
-        self.seq_skip = seq_skip
         self.gap = gap
         self.have_actions = have_actions
         self.relative = relative
@@ -247,6 +243,10 @@ class P2DDataset(object):
 
         with h5py.File(data_file_path, 'r') as fp:
             self.parents = fp['/parents'].value
+            self.frame_skip = fp['/frame_skip']
+            self.eval_condition_length = fp['eval_condition_length'].value
+            self.eval_test_length = fp['eval_test_length'].value
+            self.eval_seq_gap = fp['eval_seq_gap'].value
 
             if self.remove_head:
                 # head removal matrix
@@ -288,7 +288,7 @@ class P2DDataset(object):
                 # don't both with relative poses
                 norm_poses, pp_offset, pp_scale = preprocess_sequence(
                     orig_poses,
-                    self.seq_skip,
+                    self.frame_skip,
                     self.parents if self.relative else None,
                     smooth_sigma=2,
                     head_vel=head_vel,
@@ -354,7 +354,7 @@ class P2DDataset(object):
         else:
             vids = self.videos[self.videos.is_val]
 
-        frame_skip = self.seq_skip
+        frame_skip = self.frame_skip
         pose_blocks = []
         mask_blocks = []
 
@@ -402,7 +402,7 @@ class P2DDataset(object):
         else:
             vids = self.videos[self.videos.is_val]
 
-        seq_skip = self.seq_skip
+        frame_skip = self.frame_skip
         seq_length = self.seq_length
         gap = self.gap
 
@@ -420,17 +420,18 @@ class P2DDataset(object):
                 inds = (np.arange(len(vid_one_hot_acts)), vid_actions)
                 vid_one_hot_acts[inds] = 1
 
-            range_count = len(vid_poses) - seq_skip * seq_length + 1
+            range_count = len(vid_poses) - frame_skip * seq_length + 1
 
             for i in range(0, range_count, gap):
-                pose_block = vid_poses[i:i + seq_skip * seq_length:seq_skip]
+                end = i + frame_skip * seq_length
+                pose_block = vid_poses[i:end:frame_skip]
                 pose_blocks.append(pose_block)
-                mask_block = vid_mask[i:i + seq_skip * seq_length:seq_skip]
+                mask_block = vid_mask[i:end:frame_skip]
                 mask_blocks.append(mask_block)
 
                 if self.have_actions:
-                    act_block = vid_one_hot_acts[i:i + seq_skip * seq_length:
-                                                 seq_skip]
+                    act_block = vid_one_hot_acts[i:i + frame_skip * seq_length:
+                                                 frame_skip]
                     action_blocks.append(act_block)
 
         poses = np.stack(pose_blocks, axis=0)
@@ -452,7 +453,7 @@ class P2DDataset(object):
         else:
             vids = self.videos[self.videos.is_val]
 
-        seq_skip = self.seq_skip
+        frame_skip = self.frame_skip
         full_length = self.aclass_full_length
         act_length = self.aclass_act_length
         gap = self.gap
@@ -474,7 +475,7 @@ class P2DDataset(object):
             # actions should be single array of action numbers
             assert actions.ndim == 1, actions.shape
             assert len(feats) == len(actions)
-            offset = (full_length - act_length) * seq_skip
+            offset = (full_length - act_length) * frame_skip
             all_runs = _runs(actions[offset:])
 
             # TODO: check what fraction of these are too short. Per Anoop's
@@ -484,20 +485,20 @@ class P2DDataset(object):
             # frames do.
             for action, start, stop in all_runs:
                 length = stop - start
-                if length < act_length * seq_skip:
+                if length < act_length * frame_skip:
                     continue
                 stop += offset
-                range_end = stop - (seq_skip * full_length) + 1
+                range_end = stop - (frame_skip * full_length) + 1
 
                 for sub_start in range(start, range_end, gap):
                     # no need to temporally downsample; features have already
                     # been temporally downsampled
                     these_feats = feats[sub_start:sub_start + full_length *
-                                        seq_skip:seq_skip]
+                                        frame_skip:frame_skip]
                     assert len(these_feats) == full_length
 
                     these_actions = actions[sub_start:sub_start + full_length *
-                                            seq_skip:seq_skip]
+                                            frame_skip:frame_skip]
                     action_suffix = these_actions[-act_length:]
                     assert len(these_actions) == full_length
                     assert len(action_suffix) == act_length
@@ -506,7 +507,7 @@ class P2DDataset(object):
                         % (action_suffix, action)
 
                     this_mask = mask[sub_start:sub_start + full_length *
-                                     seq_skip:seq_skip]
+                                     frame_skip:frame_skip]
                     assert len(this_mask) == full_length
 
                     rv.append({
@@ -529,7 +530,7 @@ class P2DDataset(object):
         else:
             vids = self.videos[self.videos.is_val]
 
-        seq_skip = self.seq_skip
+        frame_skip = self.frame_skip
         completion_length = self.completion_length
         assert completion_length > 0
 
@@ -546,13 +547,13 @@ class P2DDataset(object):
                     (len(norm_poses), self.num_actions), dtype='float32')
                 one_hot_acts[(range(len(actions)), actions)] = 1
 
-            range_bound = 1 + len(norm_poses) - seq_skip * completion_length
-            block_skip = seq_skip * completion_length
+            range_bound = 1 + len(norm_poses) - frame_skip * completion_length
+            block_skip = frame_skip * completion_length
 
             for i in range(0, range_bound, block_skip):
-                endpoint = i + seq_skip * completion_length
-                pose_block = norm_poses[i:endpoint:seq_skip]
-                mask_block = mask[i:endpoint:seq_skip]
+                endpoint = i + frame_skip * completion_length
+                pose_block = norm_poses[i:endpoint:frame_skip]
+                mask_block = mask[i:endpoint:frame_skip]
                 assert pose_block.shape == mask_block.shape, \
                     'poses %s, mask %s' % (pose_block.shape,
                                            mask_block.shape)
@@ -564,10 +565,10 @@ class P2DDataset(object):
                     'vid_name': vid_name,
                     'start': i,
                     'stop': endpoint,
-                    'skip': seq_skip,
+                    'skip': frame_skip,
                 }
                 if self.have_actions:
-                    action_block = one_hot_acts[i:endpoint:seq_skip]
+                    action_block = one_hot_acts[i:endpoint:frame_skip]
                     completion_block['actions'] = action_block
                     assert len(action_block) == len(pose_block)
                 completions.append(completion_block)
@@ -617,15 +618,19 @@ class P2DDataset(object):
 class P3DDataset(object):
     """Mimics P2DDataset, but is specialised to 3D data. Much less complicated
     because it doesn't need to deal with preprocessing, joint validity
-    (everything is assumed okay) or actions."""
+    (everything is assumed okay) or actions, for now."""
 
-    def __init__(self, data_file_path, frame_skip):
+    def __init__(self, data_file_path):
         self.data_file_path = data_file_path
-        self.frame_skip = frame_skip
         videos_list = []
 
         with h5py.File(data_file_path, 'r') as fp:
             vid_names = list(fp['seqs3d'])
+            self.parents = fp['parents_3d'].value
+            self.eval_condition_length = fp['eval_condition_length'].value
+            self.eval_test_length = fp['eval_test_length'].value
+            self.frame_skip = fp['frame_skip'].value
+            self.eval_seq_gap = fp['eval_seq_gap'].value
 
             for vid_name in vid_names:
                 skeletons = fp['/seqs3d/' + vid_name + '/skeletons'].value
@@ -656,6 +661,14 @@ class P3DDataset(object):
             skeletons[:] = (skeletons[:] - self.mean) / self.std
 
         self.dim_obs = self.mean.size
+
+    def reconstruct_skeletons(self, data):
+        """Turn flattened data items back into properly-shaped skeletons,
+        undoing any mean manipulation along the way."""
+        unnorm = data * self.std + self.mean
+        J = len(self.parents)
+        right_shape = unnorm.reshape(unnorm.shape[:-1] + (J, 3))
+        return right_shape
 
     def get_ds_for_train(self, train, seq_length, gap, discard_shorter):
         if train:
@@ -699,43 +712,33 @@ class P3DDataset(object):
 
         return skeletons, masks
 
-    def get_ds_for_eval(self, train, condtion_length, test_length):
+    def get_ds_for_eval(self, train):
         # use eval config described on experiment protocol page
         if train:
             vids = self.videos[~self.videos.is_val]
         else:
             vids = self.videos[self.videos.is_val]
 
-        raise NotImplementedError()
-
-        # TODO: update to match new validation setup
-        # TODO: factor out whatever is common between this and seq2d
+        cond_len = self.eval_condition_length
+        test_len = self.eval_test_length
+        tot_len = cond_len + test_len
+        eval_seq_gap = self.eval_seq_gap
         frame_skip = self.frame_skip
-        completion_length = self.completion_length
-        assert completion_length > 0
-
         out_seqs = []
 
         for vid_idx in vids.index:
-            norm_skeletons = vids['skeletons'][vid_idx]
-            vid_name = vids['vid_name'][vid_idx]
+            vid_skeletons = vids['skeletons'][vid_idx]
+            range_count = len(vid_skeletons) - frame_skip * tot_len + 1
 
-            range_bound = 1 + len(
-                norm_skeletons) - frame_skip * completion_length
-            block_skip = frame_skip * completion_length
+            for i in range(0, range_count, eval_seq_gap * frame_skip):
+                end = i + frame_skip * tot_len
+                assert end <= len(vid_skeletons)
+                skeleton_block = vid_skeletons[i:end:frame_skip]
+                assert len(skeleton_block) == tot_len
+                out_seqs.append(skeleton_block)
 
-            for i in range(0, range_bound, block_skip):
-                endpoint = i + frame_skip * completion_length
-                skeleton_block = norm_skeletons[i:endpoint:frame_skip]
-                assert len(skeleton_block) == completion_length, \
-                    skeleton_block.shape
-                completion_block = {
-                    'skeletons': skeleton_block,
-                    'vid_name': vid_name,
-                    'start': i,
-                    'stop': endpoint,
-                    'skip': frame_skip,
-                }
-                out_seqs.append(completion_block)
+        all_seqs = np.stack(out_seqs, axis=0)
+        conditioning = all_seqs[:, :cond_len]
+        prediction = all_seqs[:, cond_len:]
 
-        return out_seqs
+        return conditioning, prediction
