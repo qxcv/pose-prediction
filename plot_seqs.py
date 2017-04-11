@@ -57,12 +57,13 @@ class SequencePlotter(object):
             if self.subplot_titles is not None:
                 ax.set_title(self.subplot_titles[spi])
 
+    def make_anim(self):
         self.animation = anim.FuncAnimation(
             self.fig,
             self.animate_step,
             frames=self.T,
             repeat=True,
-            interval=1000 * (1 / fps),
+            interval=1000 * (1 / self.fps),
             blit=False)
 
     def animate_step(self, frame_number):
@@ -133,6 +134,8 @@ class SequencePlotter2D(SequencePlotter):
                     for frame_path in subseq_paths:
                         if frame_path not in self.frames:
                             self.frame_paths[frame_path] = imread(frame_path)
+
+        self.make_anim()
 
     def get_frame(self, sequence_id, frame_number):
         # get a frame for the given sequence and frame, if possible, or return
@@ -219,6 +222,8 @@ class SequencePlotter3D(SequencePlotter):
         for seq in self.sequences:
             xyz = expmap_to_xyz(seq, self.parents, self.bone_lengths)
             self.xyz_skels.append(xyz)
+
+        self.make_anim()
 
     def draw_frame(self, ax, sequence_id, frame_number):
         xyz_skeleton = self.xyz_skels[sequence_id][frame_number]
