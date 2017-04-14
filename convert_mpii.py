@@ -208,7 +208,6 @@ def load_seq(args):
     # Make sure that scale is sane
     if abs(scale) < 40 or abs(scale) > 400:
         return None
-    joints /= scale
 
     # Need to be T*XY*J
     joints = joints.transpose((0, 2, 1))

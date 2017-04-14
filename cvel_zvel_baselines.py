@@ -26,6 +26,10 @@ parser.add_argument(
     help='treat this as a 3D dataset')
 
 
+def f32(x):
+    return np.asarray(x, dtype='float32')
+
+
 def constant_velocity(input_poses, steps_to_predict):
     N, T, J, D = input_poses.shape
     assert J > D, \
@@ -33,12 +37,11 @@ def constant_velocity(input_poses, steps_to_predict):
     # velocities for each using only last two frames
     # TODO: is this the right way to do it? does velocity over entire sequence
     # make more sense?
-    velocities = input_poses[:, -1:] - input_poses[:, -2:-1]
-    velocities = velocities.astype('float32')
+    velocities = f32(input_poses[:, -1:] - input_poses[:, -2:-1])
     nsteps = np.arange(steps_to_predict).reshape((1, -1, 1, 1)) + 1
-    nsteps = nsteps.astype('float32')
+    nsteps = f32(nsteps)
     # broadcasting abuse :-)
-    rv = (velocities * nsteps).astype('float32')
+    rv = f32(velocities * nsteps)
     assert rv.shape == (N, steps_to_predict, J, D)
     return rv
 
@@ -48,8 +51,8 @@ def zero_velocity(input_poses, steps_to_predict):
     N, T, J, D = input_poses.shape
     assert J > D, \
         "should have XY or XYZ *last*"
-    last_pose = input_poses[:, -1:].astype('float32')
-    rv = np.tile(last_pose, (1, steps_to_predict, 1, 1)).astype('float32')
+    last_pose = f32(input_poses[:, -1:])
+    rv = f32(np.tile(last_pose, (1, steps_to_predict, 1, 1)))
     assert rv.shape == (N, steps_to_predict, J, D)
     return rv
 
@@ -93,13 +96,13 @@ if __name__ == '__main__':
     if args.is_3d:
         dataset = P3DDataset(args.dataset_path)
         cond_on, pred_on = dataset.get_ds_for_eval(train=False)
-        cond_on_orig = dataset.reconstruct_skeletons(cond_on)
-        cond_on_orig = cond_on_orig.astype('float32')
-        pred_on_orig = dataset.reconstruct_skeletons(pred_on)
-        pred_on_orig = pred_on_orig.astype('float32')
+        cond_on_orig = f32(dataset.reconstruct_skeletons(cond_on))
+        pred_on_orig = f32(dataset.reconstruct_skeletons(pred_on))
     else:
-        raise NotImplementedError("Need to finish 2D support")
-        # dataset = P2DDataset(args.dataset_path)
+        dataset = P2DDataset(args.dataset_path)
+        cond_on, pred_on = dataset.get_ds_for_eval(train=False)
+        cond_on_orig = f32(dataset.reconstruct_poses(cond_on))
+        pred_on_orig = f32(dataset.reconstruct_poses(pred_on))
 
     try:
         os.makedirs(os.path.dirname(args.output_prefix))

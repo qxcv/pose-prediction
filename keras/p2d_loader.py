@@ -243,10 +243,10 @@ class P2DDataset(object):
 
         with h5py.File(data_file_path, 'r') as fp:
             self.parents = fp['/parents'].value
-            self.frame_skip = fp['/frame_skip']
-            self.eval_condition_length = fp['eval_condition_length'].value
-            self.eval_test_length = fp['eval_test_length'].value
-            self.eval_seq_gap = fp['eval_seq_gap'].value
+            self.frame_skip = int(fp['/frame_skip'].value)
+            self.eval_condition_length = int(fp['eval_condition_length'].value)
+            self.eval_test_length = int(fp['eval_test_length'].value)
+            self.eval_seq_gap = int(fp['eval_seq_gap'].value)
 
             if self.remove_head:
                 # head removal matrix
@@ -273,14 +273,18 @@ class P2DDataset(object):
             vid_names = list(fp['seqs'])
 
             for vid_name in vid_names:
+                orig_poses = fp['/seqs/' + vid_name + '/poses'].value
+
                 sfact_path = '/seqs/' + vid_name + '/scale'
                 if sfact_path in fp:
-                    seq_scale = fp[sfact_path].value
+                    scales = fp[sfact_path].value
                 else:
-                    seq_scale = 1.0
+                    scales = np.ones((len(poses),))
 
-                orig_poses = fp['/seqs/' + vid_name + '/poses'].value
-                orig_poses = orig_poses.astype('float32') / seq_scale
+                assert scales.ndim == 1
+                assert len(scales) == len(orig_poses)
+
+                orig_poses = orig_poses.astype('float32') / scales.reshape((-1, 1, 1))
                 if np.any(np.isnan(orig_poses)) or np.any(
                         np.abs(orig_poses) > 1e5):
                     print('Rejecting %s (invalid or too big)' % vid_name)
@@ -322,7 +326,7 @@ class P2DDataset(object):
                     'vid_name': vid_name,
                     'mask': mask,
                     'is_val': not is_train,
-                    'seq_scale': seq_scale
+                    'scales': scales
                 }
                 if self.have_actions:
                     vid_meta['actions'] = actions
@@ -340,8 +344,8 @@ class P2DDataset(object):
         # (almost) constant zero
         self.std[self.std < 1e-5] = 1
         pms_zip = zip(self.videos['poses'], self.videos['mask'],
-                      self.videos['seq_scale'])
-        for poses, mask, pre_scale in pms_zip:
+                      self.videos['scales'])
+        for poses, mask, scales in pms_zip:
             poses[:] = (poses[:] - self.mean) / self.std
             # TODO: should I leave this in? Does it make things better?
             poses[mask == 0] = 0
@@ -443,6 +447,40 @@ class P2DDataset(object):
             actions = None
 
         return poses, masks, actions
+
+
+    def get_ds_for_eval(self, train):
+        # use eval config described on experiment protocol page
+        if train:
+            vids = self.videos[~self.videos.is_val]
+        else:
+            vids = self.videos[self.videos.is_val]
+
+        raise NotImplementedError()
+
+        cond_len = self.eval_condition_length
+        test_len = self.eval_test_length
+        tot_len = cond_len + test_len
+        eval_seq_gap = self.eval_seq_gap
+        frame_skip = self.frame_skip
+        out_seqs = []
+
+        for vid_idx in vids.index:
+            vid_skeletons = vids['skeletons'][vid_idx]
+            range_count = len(vid_skeletons) - frame_skip * tot_len + 1
+
+            for i in range(0, range_count, eval_seq_gap * frame_skip):
+                end = i + frame_skip * tot_len
+                assert end <= len(vid_skeletons)
+                skeleton_block = vid_skeletons[i:end:frame_skip]
+                assert len(skeleton_block) == tot_len
+                out_seqs.append(skeleton_block)
+
+        all_seqs = np.stack(out_seqs, axis=0)
+        conditioning = all_seqs[:, :cond_len]
+        prediction = all_seqs[:, cond_len:]
+
+        return conditioning, prediction
 
     def get_aclass_ds(self, train):
         assert self.have_actions, \
@@ -606,7 +644,9 @@ class P2DDataset(object):
 
         # 3) Undo video-specific scaling, if necessary
         if vid_name is not None:
-            vid_scale = self.videos['seq_scale'][vid_idx]
+            scales = self.videos['scales'][vid_idx]
+            print('WARNING! Using one scale for entire video %s' % vid_name)
+            vid_scale = scales.mean()
             block = block * vid_scale
 
         assert block.shape == rel_block.shape[:2] + (2, len(self.parents)), \

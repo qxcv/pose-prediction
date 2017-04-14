@@ -95,8 +95,8 @@ for i=1:length(db.data)
     end
     
     train_path = sprintf('/seqs/vid%i/is_train', tmp2_id);
-    h5create(dest_h5, train_path, size(poses), ...
-        'DataType', 'uint8');
+    h5create(dest_h5, train_path, 1, 'DataType', 'uint8');
+    h5write(dest_h5, train_path, uint8(~info.is_test));
     
     scale_path = sprintf('/seqs/vid%i/scale', tmp2_id);
     scales = info.diam * ones([length(poses) 1]);
