@@ -17,7 +17,7 @@ while exist(dest_h5, 'file')
     prompt = sprintf('File %s already exists. Delete it first? [y/n] ', ...
         dest_h5);
     answer = input(prompt, 's');
-    answer = strip(answer);
+    answer = stripws(answer);
     if strcmpi(answer, 'y') || strcmpi(answer, 'yes')
         fprintf('Okay, deleting %s\n', dest_h5);
         delete(dest_h5);
