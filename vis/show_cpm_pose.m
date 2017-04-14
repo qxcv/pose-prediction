@@ -1,5 +1,8 @@
-function show_cpm_pose(maybe_path, bb, det_pose)
-%SHOW_CPM_POSE Plot a pose in format used by CPM
+function show_cpm_pose(maybe_path, bb, det_pose, image_relative)
+%SHOW_CPM_POSE Plot a pose in format used by CPM.
+
+% Unless image_relative is true, it will crop the image and assume that the
+% pose was found by running a 368x368 CPM on the crop.
 
 % Skeleton used by CPM:
 % 1: Head
@@ -20,10 +23,18 @@ end
 if ~isempty(bb)
     im = imcrop(im, bb);
 end
+if nargin < 4
+    image_relative = false;
+end
 imagesc(im);
 hold on;
-det_pose(:,1) = det_pose(:,1)*size(im,2)/368;
-det_pose(:,2) = det_pose(:,2)*size(im,1)/368;
+if image_relative && ~isempty(bb)
+    % oh crap, we cropped the frame, so now we need to shift the pose :/
+    det_pose = single(det_pose) - bb(1:2);
+elseif ~image_relative
+    det_pose(:,1) = det_pose(:,1)*size(im,2)/368;
+    det_pose(:,2) = det_pose(:,2)*size(im,1)/368;
+end
 line([det_pose(1,1), det_pose(2,1)], [det_pose(1,2), det_pose(2,2)], ...
     'color', 'r', 'linewidth',3);
 line([det_pose(2,1), det_pose(3,1)], [det_pose(2,2), det_pose(3,2)], ...
