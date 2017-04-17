@@ -9,6 +9,7 @@
 /ref/
 /keras/h36m-3d-poses/
 /penn
+/*_baselines/
 *.h5
 *.npz
 

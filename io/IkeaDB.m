@@ -48,6 +48,7 @@ classdef IkeaDB < handle
                 'IkeaDB');
             
             obj.load_poses();
+            obj.splice_test_poses();
             obj.map_gopro_ids();
             obj.mark_train_test();
             obj.load_true_acts();
@@ -68,13 +69,16 @@ classdef IkeaDB < handle
             good_joints = 1:8;
             seq_poses = obj.poses{dbi.video_id}(good_joints, :, :);
             test_poses = obj.unmap_pose(dbi.test_poses, datum_id);
+            test_pose_mask = false([1 size(seq_poses, 3)]);
             if ~isempty(test_poses)
                 test_poses = test_poses(good_joints, :, :);
+                test_pose_mask(dbi.test_pose_inds) = true;
             end
             info = struct('anno', dbi, 'poses', seq_poses, 'njoints', ...
                 size(seq_poses, 1), 'is_test', dbi.is_test, ...
                 'test_pose_inds', dbi.test_pose_inds, 'diam', diam, ...
-                'test_poses', test_poses, 'tmp2_id', dbi.video_id);
+                'test_poses', test_poses, 'tmp2_id', dbi.video_id, ...
+                'test_pose_mask', test_pose_mask);
         end
         
         function show_pose(obj, seq_id, pose_id, det_pose)
@@ -101,6 +105,21 @@ classdef IkeaDB < handle
         % these methods are just called sequentially by the constructor
         % they've only been split out to make it clear what the different
         % bits of code do
+        
+        function splice_test_poses(obj)
+            % Insert test poses into self.poses
+            nonempty = find(~cellfun(@isempty, {obj.data.test_poses}));
+            for i=nonempty
+                tmp2_id = obj.data(i).video_id;
+                ins_poses = obj.data(i).test_poses;
+                ins_inds = obj.data(i).test_pose_inds;
+                old_poses = obj.poses{tmp2_id};
+                assert(size(old_poses, 1) == size(ins_poses, 1));
+                assert(size(old_poses, 2) == size(ins_poses, 2));
+                old_poses(:, :, ins_inds) = ins_poses;
+                obj.poses{tmp2_id} = old_poses;
+            end
+        end
         
         function load_poses(obj)
             % Load all poses; obj.poses will have some gaps (e.g. clip 27

@@ -247,10 +247,27 @@ class P2DDataset(object):
             self.eval_condition_length = int(fp['eval_condition_length'].value)
             self.eval_test_length = int(fp['eval_test_length'].value)
             self.eval_seq_gap = int(fp['eval_seq_gap'].value)
+            hsa_key = 'has_sparse_annos'
+            self.has_sparse_annos = hsa_key in fp and bool(fp[hsa_key].value)
+            if 'pck_joints' in fp:
+                pck_limb_str = fp['/pck_joints']\
+                                 .value \
+                                 .tostring() \
+                                 .decode('utf8')
+                self.pck_joints = json.loads(pck_limb_str)
+            else:
+                self.pck_joints = {'all': list(range(len(self.parents)))}
 
             if self.remove_head:
                 # head removal matrix
                 hrm_mat, self.parents = head_remover(self.parents)
+                if self.pck_joints is not None:
+                    for k, v in list(self.pck_joints.items()):
+                        new_v = [x - 1 for x in v if x != 0]
+                        if not new_v:
+                            del self.pck_joints[k]
+                        else:
+                            self.pck_joints[k] = new_v
             else:
                 hrm_mat = None
 
@@ -279,12 +296,13 @@ class P2DDataset(object):
                 if sfact_path in fp:
                     scales = fp[sfact_path].value
                 else:
-                    scales = np.ones((len(poses),))
+                    scales = np.ones((len(orig_poses), ))
 
                 assert scales.ndim == 1
                 assert len(scales) == len(orig_poses)
 
-                orig_poses = orig_poses.astype('float32') / scales.reshape((-1, 1, 1))
+                orig_poses = orig_poses.astype('float32') / scales.reshape(
+                    (-1, 1, 1))
                 if np.any(np.isnan(orig_poses)) or np.any(
                         np.abs(orig_poses) > 1e5):
                     print('Rejecting %s (invalid or too big)' % vid_name)
@@ -330,6 +348,12 @@ class P2DDataset(object):
                 }
                 if self.have_actions:
                     vid_meta['actions'] = actions
+                if self.has_sparse_annos:
+                    is_true_pose = fp['/seqs/' +
+                                      vid_name + '/is_true_pose'].value
+                    assert is_true_pose.ndim == 1 and len(is_true_pose) == len(
+                        norm_poses)
+                    vid_meta['is_true_pose'] = is_true_pose.astype(bool)
 
                 videos_list.append(vid_meta)
 
@@ -373,8 +397,8 @@ class P2DDataset(object):
                 block_length = len(pose_block)
                 assert block_length <= seq_length
                 pads = [(0, seq_length - block_length), (0, 0)]
-                pose_block_padded = np.pad(pose_block, pads,
-                                           mode='constant').astype('float32')
+                pose_block_padded = np.pad(
+                    pose_block, pads, mode='constant').astype('float32')
                 assert np.all(pose_block_padded[:block_length] == pose_block)
                 pose_blocks.append(pose_block_padded)
 
@@ -382,10 +406,8 @@ class P2DDataset(object):
                 mask_block = vid_masks[i:end:frame_skip]
                 pads = [(0, seq_length - block_length)] \
                     + [(0, 0)] * (mask_block.ndim - 1)
-                mask_block_padded = np.pad(mask_block,
-                                           pads,
-                                           mode='constant',
-                                           constant_values=0)
+                mask_block_padded = np.pad(
+                    mask_block, pads, mode='constant', constant_values=0)
                 mask_blocks.append(mask_block_padded.astype('float32'))
 
         poses = np.stack(pose_blocks, axis=0)
@@ -448,15 +470,12 @@ class P2DDataset(object):
 
         return poses, masks, actions
 
-
-    def get_ds_for_eval(self, train):
+    def get_ds_for_eval(self, train, discard_no_annos=True):
         # use eval config described on experiment protocol page
         if train:
             vids = self.videos[~self.videos.is_val]
         else:
             vids = self.videos[self.videos.is_val]
-
-        raise NotImplementedError()
 
         cond_len = self.eval_condition_length
         test_len = self.eval_test_length
@@ -464,23 +483,46 @@ class P2DDataset(object):
         eval_seq_gap = self.eval_seq_gap
         frame_skip = self.frame_skip
         out_seqs = []
+        scale_seqs = []
+        if self.has_sparse_annos:
+            valid_seqs = []
 
         for vid_idx in vids.index:
-            vid_skeletons = vids['skeletons'][vid_idx]
-            range_count = len(vid_skeletons) - frame_skip * tot_len + 1
+            vid_poses = vids['poses'][vid_idx]
+            vid_scales = vids['scales'][vid_idx]
+            if self.has_sparse_annos:
+                true_pose_mask = vids['is_true_pose'][vid_idx]
+            range_count = len(vid_poses) - frame_skip * tot_len + 1
+
+            # TODO: need to handle mask, etc., if I'm going to run on Penn
+            # Action
 
             for i in range(0, range_count, eval_seq_gap * frame_skip):
                 end = i + frame_skip * tot_len
-                assert end <= len(vid_skeletons)
-                skeleton_block = vid_skeletons[i:end:frame_skip]
-                assert len(skeleton_block) == tot_len
-                out_seqs.append(skeleton_block)
+                assert end <= len(vid_poses)
+                if self.has_sparse_annos:
+                    valid_block = true_pose_mask[i:end:frame_skip]
+                    if discard_no_annos and not valid_block[cond_len:].any():
+                        continue
+                    valid_seqs.append(valid_block)
+                pose_block = vid_poses[i:end:frame_skip]
+                out_seqs.append(pose_block)
+                scale_block = vid_scales[i:end:frame_skip]
+                scale_seqs.append(scale_block)
 
         all_seqs = np.stack(out_seqs, axis=0)
+        assert all_seqs.shape[1] == tot_len
         conditioning = all_seqs[:, :cond_len]
         prediction = all_seqs[:, cond_len:]
+        all_scales = np.stack(scale_seqs, axis=0)
+        prediction_scales = all_scales[:, cond_len:]
+        rv = (conditioning, prediction, prediction_scales)
+        if self.has_sparse_annos:
+            all_valids = np.stack(valid_seqs, axis=0)
+            prediction_valids = all_valids[:, cond_len:]
+            rv += (prediction_valids, )
 
-        return conditioning, prediction
+        return rv
 
     def get_aclass_ds(self, train):
         assert self.have_actions, \

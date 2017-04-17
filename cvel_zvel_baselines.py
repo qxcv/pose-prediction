@@ -2,16 +2,18 @@
 """Constant-velocity and zero-velocity baselines for 2D and 3D pose estimation
 datasets."""
 
+
 import sys
 sys.path.append('keras')
 
-import argparse
-import os
+import argparse  # noqa: E402
+import json  # noqa: E402
+import os  # noqa: E402
 
-import h5py
-import numpy as np
+import h5py  # noqa: E402
+import numpy as np  # noqa: E402
 
-from p2d_loader import P2DDataset, P3DDataset
+from p2d_loader import P2DDataset, P3DDataset  # noqa: E402
 
 parser = argparse.ArgumentParser()
 parser.add_argument('dataset_path', help='path to input HDF5 file')
@@ -57,11 +59,23 @@ def zero_velocity(input_poses, steps_to_predict):
     return rv
 
 
-def write_baseline(out_prefix, cond_on, pred_on, parents, is_3d, method):
+def write_baseline(out_prefix, cond_on, pred_on, parents, is_3d, usable,
+                   scales, extra_data, method):
     meth_name = method.__name__
     steps_to_predict = pred_on.shape[1]
     out_path = out_prefix + '_' + meth_name + '.h5'
     print('Writing %s baseline to %s' % (meth_name, out_path))
+    if not is_3d:
+        # in 2D, XY is stored second, while in 3D, XYZ is stored last (yes this
+        # is a mess, but it takes time to fix)
+        cond_on = cond_on.transpose((0, 1, 3, 2))
+    result = method(cond_on, steps_to_predict)[:, None, ...]
+    if not is_3d:
+        del cond_on
+        # move back into N,T,XY,J format
+        result = result.transpose((0, 1, 2, 4, 3))
+        assert (result.shape[0],) + result.shape[2:] == pred_on.shape, \
+            (result.shape, pred_on.shape)
     with h5py.File(out_path, 'w') as fp:
         fp['/method_name'] = meth_name
         if is_3d:
@@ -75,32 +89,43 @@ def write_baseline(out_prefix, cond_on, pred_on, parents, is_3d, method):
                 '/skeletons_3d_pred',
                 compression='gzip',
                 shuffle=True,
-                data=method(cond_on, steps_to_predict)[:, None, ...])
+                data=result)
         else:
             fp['/parents_2d'] = parents
             fp.create_dataset(
-                '/poses_3d_true',
+                '/poses_2d_true',
                 compression='gzip',
                 shuffle=True,
                 data=pred_on)
+            fp['/scales_2d'] = f32(scales)
             fp.create_dataset(
-                '/poses_3d_pred',
+                '/poses_2d_pred',
                 compression='gzip',
                 shuffle=True,
-                data=method(cond_on, steps_to_predict)[:, None, ...])
+                data=result)
+        fp['/is_usable'] = usable
+        fp['/extra_data'] = json.dumps(extra_data)
 
 
 if __name__ == '__main__':
     args = parser.parse_args()
+    extra_data = {}
 
     if args.is_3d:
         dataset = P3DDataset(args.dataset_path)
         cond_on, pred_on = dataset.get_ds_for_eval(train=False)
         cond_on_orig = f32(dataset.reconstruct_skeletons(cond_on))
         pred_on_orig = f32(dataset.reconstruct_skeletons(pred_on))
+        pred_val = pred_scales = None
     else:
-        dataset = P2DDataset(args.dataset_path)
-        cond_on, pred_on = dataset.get_ds_for_eval(train=False)
+        dataset = P2DDataset(args.dataset_path, 32)
+        evds = dataset.get_ds_for_eval(train=False)
+        if dataset.has_sparse_annos:
+            cond_on, pred_on, pred_scales, pred_val = evds
+        else:
+            cond_on, pred_on, pred_scales = evds
+            pred_val = None
+        extra_data['pck_joints'] = dataset.pck_joints
         cond_on_orig = f32(dataset.reconstruct_poses(cond_on))
         pred_on_orig = f32(dataset.reconstruct_poses(pred_on))
 
@@ -109,7 +134,15 @@ if __name__ == '__main__':
     except FileExistsError:
         pass
 
+    if pred_val is None:
+        pred_val = np.ones((len(pred_on_orig), ), dtype=bool)
+
+    if pred_scales is None:
+        pred_scales = np.ones((len(pred_on_orig), ), dtype='float32')
+
     write_baseline(args.output_prefix, cond_on_orig, pred_on_orig,
-                   dataset.parents, args.is_3d, constant_velocity)
+                   dataset.parents, args.is_3d, pred_val, pred_scales,
+                   extra_data, constant_velocity)
     write_baseline(args.output_prefix, cond_on_orig, pred_on_orig,
-                   dataset.parents, args.is_3d, zero_velocity)
+                   dataset.parents, args.is_3d, pred_val, pred_scales,
+                   extra_data, zero_velocity)

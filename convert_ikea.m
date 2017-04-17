@@ -63,6 +63,14 @@ h5write(dest_h5, '/eval_seq_gap', int64(4));
 h5create(dest_h5, '/frame_skip', 1, 'DataType', 'int64');
 h5write(dest_h5, '/frame_skip', int64(3));
 
+% tell loader that poses have been annotated individually, one-by-one
+h5create(dest_h5, '/has_sparse_annos', 1, 'DataType', 'uint8');
+h5write(dest_h5, '/has_sparse_annos', uint8(1));
+
+pck_joints_str = '{"shoulders": [2, 5], "wrists": [4, 7], "head": [0], "neck": [1], "elbows": [3, 6]}';
+h5create(dest_h5, '/pck_joints', length(pck_joints_str), 'DataType', 'uint8');
+h5write(dest_h5, '/pck_joints', uint8(pck_joints_str));
+
 % Save action vectors (one action per time) and poses
 for i=1:length(db.data)
     info = db.seqinfo(i);
@@ -83,16 +91,11 @@ for i=1:length(db.data)
         'DataType', 'int16', 'ChunkSize', size(poses));
     h5write(dest_h5, pose_path, int16(poses));
 
-    anno_poses = info.test_poses;
-    if ~isempty(anno_poses)
-        % use Python-style indexing for test pose indices
-        anno_pose_inds = info.test_pose_inds - 1;
-        anno_path = sprintf('/seqs/vid%i/annot_poses', tmp2_id);
-        h5create(dest_h5, anno_path, size(anno_poses), ...
-            'DataType', 'int16', 'ChunkSize', size(anno_poses));
-        h5write(dest_h5, anno_path, int16(anno_poses));
-        h5writeatt(dest_h5, anno_path, 'indices', anno_pose_inds);
-    end
+    test_pose_mask = info.test_pose_mask;
+    htp_path = sprintf('/seqs/vid%i/is_true_pose', tmp2_id);
+    h5create(dest_h5, htp_path, length(test_pose_mask), ...
+        'DataType', 'uint8', 'ChunkSize', length(test_pose_mask));
+    h5write(dest_h5, htp_path, uint8(test_pose_mask));
     
     train_path = sprintf('/seqs/vid%i/is_train', tmp2_id);
     h5create(dest_h5, train_path, 1, 'DataType', 'uint8');
