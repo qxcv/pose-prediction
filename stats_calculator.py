@@ -76,6 +76,14 @@ def broadcast_out_preds(preds, *arrs):
     return return_arrays
 
 
+def to_str(data):
+    if isinstance(data, bytes):
+        return data.decode('utf8')
+    elif isinstance(data, str):
+        return data
+    raise TypeError("Don't know how to convert %s to string" % type(data))
+
+
 parser = ArgumentParser()
 parser.add_argument('h5_file', help='input stats file to read from')
 parser.add_argument(
@@ -85,9 +93,8 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     with h5py.File(args.h5_file) as fp:
-        method = fp['/method_name'].value
-        assert isinstance(method, str)
-        extra_data = json.loads(fp['/extra_data'].value)
+        method = to_str(fp['/method_name'].value)
+        extra_data = json.loads(to_str(fp['/extra_data'].value))
 
         has_2d = 'parents_2d' in fp
         if has_2d:

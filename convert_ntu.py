@@ -16,6 +16,11 @@ from ntu import (ACTION_CLASSES, BAD_IDENTIFIERS, load_skeletons,
                  EVAL_PERFORMERS)
 from expmap import xyz_to_expmap, bone_lengths
 
+FRAME_SKIP = 2
+CONDITION_LENGTH = 30
+TEST_LENGTH = 45
+TEST_GAP = 15
+
 # From readme in example code repo: SsssCcccPpppRrrrAaaa. S, C, P, R and A
 # denote setup, camera ID, performer ID, replication number (1/2), action
 # label, respectively.
@@ -62,6 +67,7 @@ JOINTS_TO_KEEP = [
     'Head', 'Neck', 'ShoulderRight', 'ElbowRight', 'WristRight',
     'ShoulderLeft', 'ElbowLeft', 'WristLeft'
 ]
+# TODO: do the same thing to 3D skeleton
 TO_KEEP_INDS = list(map(lambda k: JNI[k], JOINTS_TO_KEEP))
 
 
@@ -165,6 +171,11 @@ if __name__ == '__main__':
         out_fp['/action_names'] = h5_json_encode(action_names)
         out_fp['/num_actions'] = len(action_names)
 
+        out_fp['/frame_skip'] = FRAME_SKIP
+        out_fp['/eval_condition_length'] = CONDITION_LENGTH
+        out_fp['/eval_test_length'] = TEST_LENGTH
+        out_fp['/eval_seq_gap'] = TEST_GAP
+
         out_fp['/joint_names_3d'] = h5_json_encode(JOINT_NAMES)
         out_fp['/parents_3d'] = np.array(JOINT_PARENT_INDS, dtype='uint8')
         # store good length for each bone just so that we can visualise motion
@@ -173,3 +184,6 @@ if __name__ == '__main__':
         const_bone_lengths = np.median(all_bone_lengths, axis=0)
         assert const_bone_lengths.shape == (len(JOINT_PARENT_INDS), )
         out_fp['/bone_lengths_3d'] = const_bone_lengths.astype('float32')
+
+        # we don't have any annotations, but shhhhh, don't tell the loader
+        out_fp['/has_sparse_annos'] = False
