@@ -135,10 +135,10 @@ if __name__ == '__main__':
         pass
 
     if pred_val is None:
-        pred_val = np.ones((len(pred_on_orig), ), dtype=bool)
+        pred_val = np.ones(pred_on_orig.shape[:2], dtype=bool)
 
     if pred_scales is None:
-        pred_scales = np.ones((len(pred_on_orig), ), dtype='float32')
+        pred_scales = np.ones(pred_on_orig.shape[:2], dtype='float32')
 
     write_baseline(args.output_prefix, cond_on_orig, pred_on_orig,
                    dataset.parents, args.is_3d, pred_val, pred_scales,

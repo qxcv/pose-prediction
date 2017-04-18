@@ -140,7 +140,7 @@ if __name__ == '__main__':
         pck_samples = []
         # thresholds are expressed in "fraction of distance across bounding
         # box", so only really low thresholds are relevant
-        thresholds = [0.001, 0.002, 0.005, 0.01, 0.02, 0.05]
+        thresholds = np.linspace(0.001, 0.05, 100)
         for group_name, joints in pck_joints.items():
             group_pcks = pck(flat_2d_true, flat_2d_pred, flat_mask, joints,
                              flat_scales, thresholds)
