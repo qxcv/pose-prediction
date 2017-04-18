@@ -167,7 +167,7 @@ def process_tasks(to_process, dest):
             is_train = task['is_train']
             fp[seq_prefix + 'poses'] = poses
             fp[seq_prefix + 'actions'] = actions
-            fp[seq_prefix + 'scale'] = scale
+            fp[seq_prefix + 'scale'] = np.full((len(poses),), scale)
             fp[seq_prefix + 'is_train'] = is_train
 
             # now 3D
