@@ -70,6 +70,11 @@ parser.add_argument(
     metavar=('WIDTH', 'HEIGHT'),
     default=[6, 3],
     help="Dimensions (in inches) for saved plot")
+parser.add_argument(
+    '--xtype',
+    choices=['thresh', 'time'],
+    default='thresh',
+    help='choice of dimension for x-axis')
 
 
 def load_data(directory, method_names, part_names):
@@ -81,7 +86,7 @@ def load_data(directory, method_names, part_names):
             csv_path = path.join(directory, 'pck_%s_%s.csv' % (method, part))
             data = np.loadtxt(csv_path, delimiter=',')
             times = data[:, 0].astype(int)
-            # pcks[thresh,time] gives PCK at given threshold and time step (in
+            # pcks[time, thresh] gives PCK at given threshold and time step (in
             # [0, 1])
             pcks = data[:, 1:]
             with open(csv_path, 'r') as fp:
@@ -102,27 +107,26 @@ def load_data(directory, method_names, part_names):
     return data_table, all_thresh, all_times
 
 
-if __name__ == '__main__':
-    args = parser.parse_args()
+def select_thresh_ind(data_table, parts, thresholds, method1, method2):
+    """Select threshold that best maximises data separation between two
+    methods."""
+    costs = np.zeros_like(thresholds)
+    for part in parts:
+        # pcks[thresh,time] gives PCK at given threshold and time step (in
+        # [0, 1])
+        meth1_pcks = data_table[(method1, part)]
+        meth2_pcks = data_table[(method2, part)]
+        separations = np.sum(meth1_pcks - meth2_pcks, axis=0)
+        costs[:] += separations
+    return np.argmax(costs)
 
-    matplotlib.rcParams.update({
-        'font.family': 'serif',
-        'pgf.rcfonts': False,
-        'pgf.texsystem': 'pdflatex',
-        'xtick.labelsize': 'xx-small',
-        'ytick.labelsize': 'xx-small',
-        'legend.fontsize': 'xx-small',
-        'axes.labelsize': 'x-small',
-        'axes.titlesize': 'small',
-    })
 
+def plot_xtype_thresh(data_table, all_thresholds, all_times, args):
     methods = args.methods
-    labels = methods
     parts = args.parts
     sel_times = np.array(list(map(int, args.times)))
-    data_table, all_thresholds, all_times = load_data(args.stats_dir, methods,
-                                                      parts)
     sel_time_inds = [np.nonzero(all_times == t)[0] for t in sel_times]
+    labels = methods
 
     # Time goes vertically downwards, parts go left-to-right
     _, subplots = plt.subplots(
@@ -184,6 +188,99 @@ if __name__ == '__main__':
         mode="expand",
         borderaxespad=0,
         frameon=False)
+    return legend
+
+
+def plot_xtype_time(data_table, all_thresholds, all_times, args):
+    methods = args.methods
+    parts = args.parts
+    labels = methods
+    thresh_ind = select_thresh_ind(data_table, parts, all_thresholds,
+                                   methods[0], methods[1])
+    threshold = all_thresholds[thresh_ind]
+
+    # Parts go left-to-right, there are no times
+    _, subplots = plt.subplots(1, len(parts), sharey=True, sharex=True)
+    common_handles = None
+    for col, part in enumerate(parts):
+        subplot = subplots[col]
+        pcks = []
+        for method in methods:
+            pckt = data_table[(method, part)]
+            assert pckt.shape == all_times.shape + all_thresholds.shape
+            method_pcks = pckt[:, thresh_ind]
+            pcks.append(method_pcks)
+        if common_handles is None:
+            # Record first lot of handles for reuse
+            common_handles = []
+            for pck, label, marker in zip(pcks, labels, cycle(MARKERS)):
+                handle, = subplot.plot(
+                    all_times, 100 * pck, label=label, marker=marker)
+                common_handles.append(handle)
+        else:
+            for pck, handle in zip(pcks, common_handles):
+                props = handle.properties()
+                kwargs = {
+                    k: v
+                    for k, v in props.items() if k in COMMON_PROPS
+                }
+                subplot.plot(all_times, 100 * pck, **kwargs)
+
+        # Labels, titles
+        subplot.set_title('%s at thresh %f' % (part, threshold))
+        subplot.set_xlabel('Frame number')
+        subplot.grid(which='both')
+
+        if args.xmax is not None:
+            subplot.set_xlim(xmax=args.xmax)
+
+    # TODO: factor this out
+    subplots[0].set_ylabel('Accuracy (%)')
+    subplots[0].set_ylim(ymin=0, ymax=100)
+    minor_locator = AutoMinorLocator(2)
+    subplots[0].yaxis.set_minor_locator(minor_locator)
+    subplots[0].set_yticks(range(0, 101, 20))
+    ax = plt.gca()
+    box = ax.get_position()
+    ax.set_position([box.x0, box.y0, box.width * 0.8, box.height])
+    if args.legend_below:
+        bbox = (0.05, 0, 0.9, 0.1)
+    else:
+        bbox = (0.05, 0.88, 0.9, 0.1)
+    legend = plt.figlegend(
+        common_handles,
+        labels,
+        bbox_to_anchor=bbox,
+        loc=3,
+        ncol=3,
+        mode="expand",
+        borderaxespad=0,
+        frameon=False)
+    return legend
+
+
+if __name__ == '__main__':
+    args = parser.parse_args()
+
+    matplotlib.rcParams.update({
+        'font.family': 'serif',
+        'pgf.rcfonts': False,
+        'pgf.texsystem': 'pdflatex',
+        'xtick.labelsize': 'xx-small',
+        'ytick.labelsize': 'xx-small',
+        'legend.fontsize': 'xx-small',
+        'axes.labelsize': 'x-small',
+        'axes.titlesize': 'small',
+    })
+
+    data_table, all_thresholds, all_times = load_data(args.stats_dir,
+                                                      args.methods, args.parts)
+    if args.xtype == 'thresh':
+        legend = plot_xtype_thresh(data_table, all_thresholds, all_times, args)
+    elif args.xtype == 'time':
+        legend = plot_xtype_time(data_table, all_thresholds, all_times, args)
+    else:
+        raise ValueError('Unknown x-axis type %s' % args.xtype)
 
     if args.save is None:
         plt.show()
