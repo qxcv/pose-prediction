@@ -11,8 +11,9 @@ import os  # noqa: E402
 import h5py  # noqa: E402
 import numpy as np  # noqa: E402
 from keras.models import load_model  # noqa: E402
-import tqdm  # noqa: E402
+from tqdm import tqdm  # noqa: E402
 
+from common import CUSTOM_OBJECTS  # noqa: E402
 from p2d_loader import P2DDataset, P3DDataset  # noqa: E402
 import predict_erd_3d as perd  # noqa: E402
 import predict_lstm_3lr as pl3lr  # noqa: E402
@@ -84,7 +85,7 @@ def generic_caching_baseline(module, identifier, cache_dir, dataset):
     # convert the training model to an eval model
     if os.path.exists(model_path):
         print("Loading model for %s from '%s'" % (identifier, model_path))
-        mod_train = load_model(model_path)
+        mod_train = load_model(model_path, CUSTOM_OBJECTS)
     else:
         print("Training model for %s anew (will save to '%s')" %
               (identifier, model_path))
@@ -102,7 +103,7 @@ def generic_caching_baseline(module, identifier, cache_dir, dataset):
         # TODO: if this is slow then you will have to fix it by increasing
         # batch size and increasing number of steps, then writing a wrapper to
         # put everything in the correct shape. Keras isn't very helpful here :/
-        out_shape = (in_tensor.shape[0], steps_to_predict, in_tensor.shape[1])
+        out_shape = (in_tensor.shape[0], steps_to_predict, in_tensor.shape[2])
         out_tensor = np.zeros(out_shape, dtype='float32')
         for n in tqdm(range(in_tensor.shape[0])):
             mod_pred.reset_states()
@@ -142,9 +143,6 @@ def write_baseline(cache_dir, dataset, steps_to_predict, method):
             pred_usable = None
         extra_data['pck_joints'] = dataset.pck_joints
         pred_on_orig = f32(dataset.reconstruct_poses(pred_on))
-        # in 2D, XY is stored second, while in 3D, XYZ is stored last (yes this
-        # is a mess, but it takes time to fix)
-        cond_on = cond_on.transpose((0, 1, 3, 2))
 
     if pred_usable is None:
         pred_usable = np.ones(pred_on_orig.shape[:2], dtype=bool)
@@ -152,15 +150,15 @@ def write_baseline(cache_dir, dataset, steps_to_predict, method):
     if pred_scales is None:
         pred_scales = np.ones(pred_on_orig.shape[:2], dtype='float32')
 
-    result = method(cond_on, steps_to_predict)[:, None, ...]
+    result = method(cond_on, steps_to_predict)
     if dataset.is_3d:
         result = f32(dataset.reconstruct_skeletons(result))
     else:
-        result = f32(dataset.reconstruct_skeletons(result))[:, None]
+        result = f32(dataset.reconstruct_poses(result))
     # insert an extra axis
     result = result[:, None]
     assert (result.shape[0],) + result.shape[2:] == pred_on_orig.shape, \
-        (result.shape, pred_on.shape)
+        (result.shape, pred_on_orig.shape)
     with h5py.File(out_path, 'w') as fp:
         fp['/method_name'] = meth_name
         if dataset.is_3d:
