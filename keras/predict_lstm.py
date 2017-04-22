@@ -89,7 +89,7 @@ def train_model(train_X,
     model.fit(
         train_X,
         train_Y,
-        # batch_size=64,
+        batch_size=64,
         validation_data=(val_X, val_Y),
         epochs=2000,
         shuffle=True,
