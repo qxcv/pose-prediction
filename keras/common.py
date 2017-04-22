@@ -319,14 +319,15 @@ class VariableGaussianNoise(Layer):
     """Variant of GaussianNoise that you can turn up or down."""
 
     def __init__(self, sigma, **kwargs):
+        super(VariableGaussianNoise, self).__init__(**kwargs)
+
         self.supports_masking = True
         self.sigma = K.variable(sigma)
         self.uses_learning_phase = True
-        super(VariableGaussianNoise, self).__init__(**kwargs)
 
     def call(self, x, mask=None):
         noise_x = x + K.random_normal(
-            shape=K.shape(x), mean=0., std=self.sigma)
+            shape=K.shape(x), mean=0., stddev=self.sigma)
         return K.in_train_phase(noise_x, x)
 
     def get_sigma(self):
@@ -346,8 +347,10 @@ class VariableScaler(Layer):
     """Constant scaler with a variable coefficient."""
 
     def __init__(self, scale, **kwargs):
-        self.scale = K.variable(scale)
         super(VariableScaler, self).__init__(**kwargs)
+
+        self.scale = K.variable(scale)
+        self.supports_masking = True
 
     def call(self, x, mask=None):
         return x * self.scale

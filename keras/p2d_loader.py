@@ -201,6 +201,8 @@ def _runs(vec):
 
 
 class P2DDataset(object):
+    is_3d = False
+
     def __init__(self,
                  data_file_path,
                  seq_length,
@@ -701,6 +703,7 @@ class P3DDataset(object):
     """Mimics P2DDataset, but is specialised to 3D data. Much less complicated
     because it doesn't need to deal with preprocessing, joint validity
     (everything is assumed okay) or actions, for now."""
+    is_3d = True
 
     def __init__(self, data_file_path):
         self.data_file_path = data_file_path

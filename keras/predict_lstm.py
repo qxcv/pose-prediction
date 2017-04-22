@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-
 """LSTM-based model for predicting poses, one frame at a time"""
 
 from keras.models import Model, load_model
-from keras.layers import Input, Dense, Activation, LSTM, TimeDistributed
+from keras.layers import Input, Dense, Activation, LSTM, TimeDistributed, \
+    Masking
 from keras.callbacks import ModelCheckpoint, EarlyStopping
 import h5py
 import numpy as np
@@ -18,24 +18,25 @@ np.random.seed(2372143511)
 SEQ_LENGTH = 129
 
 
-def make_model_train(shape):
+def make_model_train(shape, mask_value):
     # Shape is (t, d), so step_data_size is size of data passed to the LSTM at
     # each time step.
     step_data_size = shape[-1]
 
     x = in_layer = Input(shape=shape)
+    x = Masking(mask_value=mask_value)(x)
     x = VariableGaussianNoise(sigma=0.01)(x)
     x = LSTM(128, return_sequences=True)(x)
     x = TimeDistributed(Dense(128))(x)
     x = Activation('relu')(x)
     out_layer = TimeDistributed(Dense(step_data_size))(x)
 
-    model = Model(input=[in_layer], output=[out_layer])
+    model = Model(inputs=[in_layer], outputs=[out_layer])
 
     return model
 
 
-def make_model_predict(train_model):
+def make_model_predict(train_model, mask_value):
     # Training on a stateless model is easy, but we need a stateful model to
     # make real predictions. Hence, we have to do this stupid Caffe-style
     # nonsense.
@@ -44,13 +45,14 @@ def make_model_predict(train_model):
     step_data_size = train_model.input_shape[2]
 
     x = in_layer = Input(batch_shape=(1, 1, step_data_size))
+    x = Masking(mask_value=mask_value)(x)
     x = VariableGaussianNoise(sigma=1e-10)(x)
     x = LSTM(128, return_sequences=True, stateful=True)(x)
     x = TimeDistributed(Dense(128))(x)
     x = Activation('relu')(x)
     out_layer = TimeDistributed(Dense(step_data_size))(x)
 
-    pred_model = Model(input=[in_layer], output=[out_layer])
+    pred_model = Model(inputs=[in_layer], outputs=[out_layer])
 
     pred_model.compile(optimizer='rmsprop', loss=huber_loss)
 
@@ -62,31 +64,36 @@ def make_model_predict(train_model):
     return pred_model
 
 
-def train_model(train_X, train_Y, val_X, val_Y):
+def train_model(train_X,
+                train_Y,
+                val_X,
+                val_Y,
+                mask_value=0.0,
+                save_path='./best-lstm-weights.h5'):
     assert train_X.ndim == 3
 
-    model = make_model_train(train_X.shape[1:])
+    model = make_model_train(train_X.shape[1:], mask_value)
 
     objective = huber_loss
     model.compile(optimizer='rmsprop', loss=objective, metrics=[objective])
 
     print('Fitting to data')
-    mod_check = ModelCheckpoint('./best-lstm-weights.h5', save_best_only=True)
+    mod_check = ModelCheckpoint(save_path, save_best_only=True)
     estop = EarlyStopping(min_delta=0, patience=250)
     sig = train_X.std()
-    ramper = GaussianRamper(patience=50, schedule=sig * np.array([
-        1e-6, 0.001, 0.002, 0.004, 0.008, 0.01, 0.05
-    ]))
-    callbacks = [
-        mod_check, estop, ramper
-    ]
-    model.fit(train_X,
-              train_Y,
-              # batch_size=64,
-              validation_data=(val_X, val_Y),
-              nb_epoch=2000,
-              shuffle=True,
-              callbacks=callbacks)
+    ramper = GaussianRamper(
+        patience=50,
+        schedule=sig * np.array([1e-6, 0.001, 0.002, 0.004, 0.008, 0.01,
+                                 0.05]))
+    callbacks = [mod_check, estop, ramper]
+    model.fit(
+        train_X,
+        train_Y,
+        # batch_size=64,
+        validation_data=(val_X, val_Y),
+        epochs=2000,
+        shuffle=True,
+        callbacks=callbacks)
 
     return model
 
@@ -105,7 +112,7 @@ def prepare_data(fp, val_frac=0.2):
         converted = convert_2d_seq(poses)
         seqs = []
         for start in range(0, len(converted) - SEQ_LENGTH + 1, SEQ_LENGTH):
-            seqs.append(converted[start:start+SEQ_LENGTH])
+            seqs.append(converted[start:start + SEQ_LENGTH])
 
         data.extend(seqs)
 
@@ -138,15 +145,14 @@ def scrape_sequences(model, data, num_to_scrape):
     """Run the LSTM model over some data one step at a time for
     (SEQ_LENGTH-1)/2 samples, then try to predict over the rest of the
     sequence. Do that num_to_scrape times, choosing samples randomly."""
-    sel_indices = np.random.choice(np.arange(data.shape[0]),
-                                   size=num_to_scrape,
-                                   replace=True)
+    sel_indices = np.random.choice(
+        np.arange(data.shape[0]), size=num_to_scrape, replace=True)
 
     assert data.ndim == 3
     assert data.shape[1] == SEQ_LENGTH - 1
 
     train_k = data.shape[1] // 2
-    all_preds = np.zeros((num_to_scrape,) + data.shape[1:])
+    all_preds = np.zeros((num_to_scrape, ) + data.shape[1:])
 
     for pi, ind in enumerate(sel_indices):
         seq = data[ind]
@@ -159,7 +165,7 @@ def scrape_sequences(model, data, num_to_scrape):
 
         # Feed on own preds
         for i in range(train_k, data.shape[1]):
-            preds[i, :] = model.predict(preds[i-1, :].reshape((1, 1, -1)))
+            preds[i, :] = model.predict(preds[i - 1, :].reshape((1, 1, -1)))
 
         all_preds[pi, :, :] = preds
 
