@@ -3,7 +3,6 @@
 from argparse import ArgumentParser
 from itertools import cycle
 from os import path
-from sys import exit, stderr
 
 import matplotlib
 from matplotlib import pyplot as plt
@@ -37,6 +36,11 @@ parser.add_argument(
     # action='append',
     default=[],
     help='Add an algorithm to the plot, by name')
+parser.add_argument(
+    '--method-names',
+    nargs='+',
+    default=None,
+    help='"Pretty" names for methods')
 parser.add_argument(
     '--parts',
     nargs='+',
@@ -75,6 +79,11 @@ parser.add_argument(
     choices=['thresh', 'time'],
     default='thresh',
     help='choice of dimension for x-axis')
+parser.add_argument(
+    '--fps',
+    type=float,
+    default=None,
+    help="Frames-per-second (converts from frame numbers to times)")
 
 
 def load_data(directory, method_names, part_names):
@@ -121,147 +130,44 @@ def select_thresh_ind(data_table, parts, thresholds, method1, method2):
     return np.argmax(costs)
 
 
-def plot_xtype_thresh(data_table, all_thresholds, all_times, args):
+def plot_xtype_thresh(data_table, all_thresholds, all_times, method_labels,
+                      args):
     methods = args.methods
     parts = args.parts
     sel_times = np.array(list(map(int, args.times)))
-    sel_time_inds = [np.nonzero(all_times == t)[0] for t in sel_times]
-    labels = methods
 
     # Time goes vertically downwards, parts go left-to-right
     _, subplots = plt.subplots(
-        len(sel_times), len(parts), sharey=True, sharex=True)
-    common_handles = None
-    for col, part in enumerate(parts):
-        for row, time in enumerate(sel_times):
-            sel_time_ind = sel_time_inds[row]
-            subplot = subplots[row][col]
-            pcks = []
-            for method in methods:
-                method_pcks = data_table[(method, part)][time, :]
-                pcks.append(method_pcks)
-            if common_handles is None:
-                # Record first lot of handles for reuse
-                common_handles = []
-                for pck, label, marker in zip(pcks, labels, cycle(MARKERS)):
-                    handle, = subplot.plot(
-                        all_thresholds, 100 * pck, label=label, marker=marker)
-                    common_handles.append(handle)
-            else:
-                for pck, handle in zip(pcks, common_handles):
-                    props = handle.properties()
-                    kwargs = {
-                        k: v
-                        for k, v in props.items() if k in COMMON_PROPS
-                    }
-                    subplot.plot(all_thresholds, 100 * pck, **kwargs)
-
-            # Labels, titles
-            subplot.set_title('%s after %d frames' % (part, time))
-            if args.thresh_is_px:
-                subplot.set_xlabel('Threshold (px)')
-            else:
-                subplot.set_xlabel('Threshold')
-            subplot.grid(which='both')
-
-            if args.xmax is not None:
-                subplot.set_xlim(xmax=args.xmax)
-
-    subplots[0][0].set_ylabel('Accuracy (%)')
-    subplots[0][0].set_ylim(ymin=0, ymax=100)
-    minor_locator = AutoMinorLocator(2)
-    subplots[0][0].yaxis.set_minor_locator(minor_locator)
-    subplots[0][0].set_yticks(range(0, 101, 20))
-    ax = plt.gca()
-    box = ax.get_position()
-    ax.set_position([box.x0, box.y0, box.width * 0.8, box.height])
-    if args.legend_below:
-        bbox = (0.05, 0, 0.9, 0.1)
-    else:
-        bbox = (0.05, 0.88, 0.9, 0.1)
-    legend = plt.figlegend(
-        common_handles,
-        labels,
-        bbox_to_anchor=bbox,
-        loc=3,
-        ncol=3,
-        mode="expand",
-        borderaxespad=0,
-        frameon=False)
-    return legend
-
-
-def plot_xtype_time(data_table, all_thresholds, all_times, args):
-    methods = args.methods
-    parts = args.parts
-    labels = methods
-    thresh_ind = select_thresh_ind(data_table, parts, all_thresholds,
-                                   methods[0], methods[1])
-    threshold = all_thresholds[thresh_ind]
-
-    # Parts go left-to-right, there are no times
-    _, subplots = plt.subplots(1, len(parts), sharey=True, sharex=True)
-    common_handles = None
-    for col, part in enumerate(parts):
-        subplot = subplots[col]
-        pcks = []
-        for method in methods:
-            pckt = data_table[(method, part)]
-            assert pckt.shape == all_times.shape + all_thresholds.shape
-            method_pcks = pckt[:, thresh_ind]
-            pcks.append(method_pcks)
-        if common_handles is None:
-            # Record first lot of handles for reuse
+           # Record first lot of handles for reuse
             common_handles = []
-            for pck, label, marker in zip(pcks, labels, cycle(MARKERS)):
+            for pck, label, marker in zip(pcks, method_labels, cycle(MARKERS)):
                 handle, = subplot.plot(
-                    all_times, 100 * pck, label=label, marker=marker)
+                    x_axis, 100 * pck, label=label, marker=marker)
                 common_handles.append(handle)
         else:
             for pck, handle in zip(pcks, common_handles):
                 props = handle.properties()
-                kwargs = {
-                    k: v
-                    for k, v in props.items() if k in COMMON_PROPS
-                }
-                subplot.plot(all_times, 100 * pck, **kwargs)
+                kwargs = {k: v for k, v in props.items() if k in COMMON_PROPS}
+                subplot.plot(x_axis, 100 * pck, **kwargs)
 
         # Labels, titles
-        subplot.set_title('%s at thresh %f' % (part, threshold))
-        subplot.set_xlabel('Frame number')
+        subplot.set_title('{}@{:.2g}'.format(part.title(), threshold))
         subplot.grid(which='both')
+        if args.fps is None:
+            subplot.set_xlabel('Frame number')
+        else:
+            subplot.set_xlabel('Time (s)')
 
         if args.xmax is not None:
             subplot.set_xlim(xmax=args.xmax)
 
-    # TODO: factor this out
-    subplots[0].set_ylabel('Accuracy (%)')
-    subplots[0].set_ylim(ymin=0, ymax=100)
-    minor_locator = AutoMinorLocator(2)
-    subplots[0].yaxis.set_minor_locator(minor_locator)
-    subplots[0].set_yticks(range(0, 101, 20))
-    ax = plt.gca()
-    box = ax.get_position()
-    ax.set_position([box.x0, box.y0, box.width * 0.8, box.height])
-    if args.legend_below:
-        bbox = (0.05, 0, 0.9, 0.1)
-    else:
-        bbox = (0.05, 0.88, 0.9, 0.1)
-    legend = plt.figlegend(
-        common_handles,
-        labels,
-        bbox_to_anchor=bbox,
-        loc=3,
-        ncol=3,
-        mode="expand",
-        borderaxespad=0,
-        frameon=False)
-    return legend
+    return subplots[0], common_handles
 
 
 if __name__ == '__main__':
     args = parser.parse_args()
 
+    # Make the plot look like LaTeX
     matplotlib.rcParams.update({
         'font.family': 'serif',
         'pgf.rcfonts': False,
@@ -273,15 +179,50 @@ if __name__ == '__main__':
         'axes.titlesize': 'small',
     })
 
+    # Load stuff from CSVs
     data_table, all_thresholds, all_times = load_data(args.stats_dir,
                                                       args.methods, args.parts)
+    if args.method_names is None:
+        method_labels = args.methods
+    else:
+        method_labels = args.method_names
+        assert len(method_labels) == len(args.methods), \
+            "'Pretty' method names should match with ordinary ones"
+
+    # Plot the data in whatever arrangement the user asked for
     if args.xtype == 'thresh':
-        legend = plot_xtype_thresh(data_table, all_thresholds, all_times, args)
+        sp_leg, handles = plot_xtype_thresh(data_table, all_thresholds,
+                                            all_times, method_labels, args)
     elif args.xtype == 'time':
-        legend = plot_xtype_time(data_table, all_thresholds, all_times, args)
+        sp_leg, handles = plot_xtype_time(data_table, all_thresholds,
+                                          all_times, method_labels, args)
     else:
         raise ValueError('Unknown x-axis type %s' % args.xtype)
 
+    # Deal with y-axis and labels
+    sp_leg.set_ylabel('Accuracy (%)')
+    sp_leg.set_ylim(ymin=0, ymax=100)
+    minor_locator = AutoMinorLocator(2)
+    sp_leg.yaxis.set_minor_locator(minor_locator)
+    sp_leg.set_yticks(range(0, 101, 20))
+    ax = plt.gca()
+    box = ax.get_position()
+    ax.set_position([box.x0, box.y0, box.width * 0.8, box.height])
+    if args.legend_below:
+        bbox = (0.05, -0.01, 0.9, 0.1)
+    else:
+        bbox = (0.05, 0.88, 0.9, 0.1)
+    legend = plt.figlegend(
+        handles,
+        method_labels,
+        bbox_to_anchor=bbox,
+        loc=3,
+        ncol=3,
+        mode="expand",
+        borderaxespad=0,
+        frameon=False)
+
+    # Save or show
     if args.save is None:
         plt.show()
     else:
