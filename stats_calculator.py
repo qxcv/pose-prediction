@@ -71,6 +71,7 @@ def broadcast_out_preds(preds, *arrs):
     return_arrays = [preds.reshape((fdim, ) + preds.shape[2:])]
     for arr in arrs:
         assert arr.shape[0] == preds.shape[0]
+        assert arr.shape[1] == preds.shape[2]
         arr_rep = np.repeat(arr[:, None, ...], reps, axis=1)
         return_arrays.append(arr_rep.reshape((fdim, ) + arr_rep.shape[2:]))
     return return_arrays
