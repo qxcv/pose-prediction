@@ -13,12 +13,16 @@ classdef IkeaDB < handle
     %   ad-hoc, since they depend on a trained network in Anoop's home dir
     %   (which has to be converted to work with Keras, etc.).
 
-    % Joint names (PC): head (1), base of neck (2), right shoulder (3), right
-    % elbow (4), right wrist (5), left shoulder (6), left elbow (7), left wrist
-    % (8)
+    % Joint names (person-centric): head (1), base of neck
+    % (2), right shoulder (3), right elbow (4), right wrist
+    % (5), left shoulder (6), left elbow (7), left wrist (8)
     properties(Constant)
         % Parents array
         PA = [1 1 2 3 4 2 6 7];
+        JOINT_NAMES = {'head', 'neck_base', ...
+            'right_shoulder', 'right_elbow', 'right_wrist', ...
+            'left_shoulder', 'left_elbow', 'left_wrist'};
+        VAL_SUBJECTS = [9 11 13];
     end
     
     properties
@@ -74,11 +78,13 @@ classdef IkeaDB < handle
                 test_poses = test_poses(good_joints, :, :);
                 test_pose_mask(dbi.test_pose_inds) = true;
             end
+            this_is_test = obj.is_test(datum_id);
             info = struct('anno', dbi, 'poses', seq_poses, 'njoints', ...
-                size(seq_poses, 1), 'is_test', dbi.is_test, ...
+                size(seq_poses, 1), 'is_test', this_is_test, ...
                 'test_pose_inds', dbi.test_pose_inds, 'diam', diam, ...
                 'test_poses', test_poses, 'tmp2_id', dbi.video_id, ...
-                'test_pose_mask', test_pose_mask);
+                'test_pose_mask', test_pose_mask, ...
+                'subject_id', dbi.person_idx);
         end
         
         function show_pose(obj, seq_id, pose_id, det_pose)
@@ -175,11 +181,17 @@ classdef IkeaDB < handle
         end
         
         function mark_train_test(obj)
-            % Train/test split is defined by which videos have test poses
-            % associated with them.
-            obj.is_test = [obj.data.is_test];
+            % Train/test split is defined by subjects
+            people = [obj.data.person_idx];
+            val_people = obj.VAL_SUBJECTS;
+            obj.is_test = ismember(people, val_people);
             obj.is_train = ~obj.is_test;
-            obj.has_anno = obj.is_test;
+            % Original train/test split was defined by
+            % whether or not a person had a manually
+            % annotated (as opposed to CPM-generated) pose.
+            % I should probably take that code out now that
+            % I don't need it.
+            obj.has_anno = [obj.data.is_test];
         end
 
         function load_true_acts(obj)
