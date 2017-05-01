@@ -138,7 +138,69 @@ def plot_xtype_thresh(data_table, all_thresholds, all_times, method_labels,
 
     # Time goes vertically downwards, parts go left-to-right
     _, subplots = plt.subplots(
-           # Record first lot of handles for reuse
+        len(sel_times), len(parts), sharey=True, sharex=True)
+    common_handles = None
+    for col, part in enumerate(parts):
+        for row, time in enumerate(sel_times):
+            subplot = subplots[row][col]
+            pcks = []
+            for method in methods:
+                method_pcks = data_table[(method, part)][time, :]
+                pcks.append(method_pcks)
+            if common_handles is None:
+                # Record first lot of handles for reuse
+                common_handles = []
+                for pck, label, marker in zip(pcks, methods, cycle(MARKERS)):
+                    handle, = subplot.plot(
+                        all_thresholds, 100 * pck, label=label, marker=marker)
+                    common_handles.append(handle)
+            else:
+                for pck, handle in zip(pcks, common_handles):
+                    props = handle.properties()
+                    kwargs = {
+                        k: v
+                        for k, v in props.items() if k in COMMON_PROPS
+                    }
+                    subplot.plot(all_thresholds, 100 * pck, **kwargs)
+
+            # Labels, titles
+            subplot.set_title('%s after %d frames' % (part, time))
+            if args.thresh_is_px:
+                subplot.set_xlabel('Threshold (px)')
+            else:
+                subplot.set_xlabel('Threshold')
+            subplot.grid(which='both')
+
+            if args.xmax is not None:
+                subplot.set_xlim(xmax=args.xmax)
+
+    return subplots[0][0], common_handles
+
+
+def plot_xtype_time(data_table, all_thresholds, all_times, args):
+    methods = args.methods
+    parts = args.parts
+    thresh_ind = select_thresh_ind(data_table, parts, all_thresholds,
+                                   methods[0], methods[1])
+    threshold = all_thresholds[thresh_ind]
+    if args.fps is None:
+        x_axis = all_times
+    else:
+        x_axis = all_times / float(args.fps)
+
+    # Parts go left-to-right, there are no times
+    _, subplots = plt.subplots(1, len(parts), sharey=True, sharex=True)
+    common_handles = None
+    for col, part in enumerate(parts):
+        subplot = subplots[col]
+        pcks = []
+        for method in methods:
+            pckt = data_table[(method, part)]
+            assert pckt.shape == all_times.shape + all_thresholds.shape
+            method_pcks = pckt[:, thresh_ind]
+            pcks.append(method_pcks)
+        if common_handles is None:
+            # Record first lot of handles for reuse
             common_handles = []
             for pck, label, marker in zip(pcks, method_labels, cycle(MARKERS)):
                 handle, = subplot.plot(
