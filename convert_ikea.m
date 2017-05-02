@@ -68,6 +68,10 @@ h5write(dest_h5, '/eval_seq_gap', int64(4));
 h5create(dest_h5, '/frame_skip', 1, 'DataType', 'int64');
 h5write(dest_h5, '/frame_skip', int64(3));
 
+% handy for versioning
+h5create(dest_h5, '/unix_time', 1, 'DataType', 'double');
+h5write(dest_h5, '/unix_time', posixtime(datetime()));
+
 pck_joints_str = '{"shoulders": [2, 5], "wrists": [4, 7], "head": [0], "neck": [1], "elbows": [3, 6]}';
 h5create(dest_h5, '/pck_joints', length(pck_joints_str), 'DataType', 'uint8');
 h5write(dest_h5, '/pck_joints', uint8(pck_joints_str));
