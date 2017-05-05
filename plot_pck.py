@@ -177,7 +177,8 @@ def plot_xtype_thresh(data_table, all_thresholds, all_times, method_labels,
     return subplots[0][0], common_handles
 
 
-def plot_xtype_time(data_table, all_thresholds, all_times, args):
+def plot_xtype_time(data_table, all_thresholds, all_times, method_labels,
+                    args):
     methods = args.methods
     parts = args.parts
     thresh_ind = select_thresh_ind(data_table, parts, all_thresholds,
@@ -267,22 +268,20 @@ if __name__ == '__main__':
     minor_locator = AutoMinorLocator(2)
     sp_leg.yaxis.set_minor_locator(minor_locator)
     sp_leg.set_yticks(range(0, 101, 20))
-    ax = plt.gca()
-    box = ax.get_position()
-    ax.set_position([box.x0, box.y0, box.width * 0.8, box.height])
-    if args.legend_below:
-        bbox = (0.05, -0.01, 0.9, 0.1)
-    else:
-        bbox = (0.05, 0.88, 0.9, 0.1)
+    # ax = plt.gca()
+    # box = ax.get_position()
+    # ax.set_position([box.x0, box.y0, box.width * 0.2, box.height])
+    # if args.legend_below:
+    #     bbox = (0.05, -0.01, 0.9, 0.1)
+    # else:
+    #     bbox = (0.05, 0.88, 0.9, 0.1)
     legend = plt.figlegend(
         handles,
         method_labels,
-        bbox_to_anchor=bbox,
-        loc=3,
-        ncol=3,
-        mode="expand",
-        borderaxespad=0,
-        frameon=False)
+        bbox_to_anchor=(1.16, 0.5),
+        loc="right",
+        frameon=False
+    )
 
     # Save or show
     if args.save is None:

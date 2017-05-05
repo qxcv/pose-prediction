@@ -107,8 +107,11 @@ if __name__ == '__main__':
             assert poses_2d_pred.ndim == 5
             assert poses_2d_pred.shape[:1] + poses_2d_pred.shape[
                 2:] == poses_2d_true.shape
-            valid_mask = fp['/is_usable'].value
             scales = fp['/scales_2d'].value
+            if '/is_usable' in fp:
+                valid_mask = fp['/is_usable'].value
+            else:
+                valid_mask = np.ones_like(scales, dtype=bool)
             assert valid_mask.ndim == 2
             assert valid_mask.shape == poses_2d_true.shape[:2]
             assert valid_mask.shape == scales.shape
@@ -141,7 +144,7 @@ if __name__ == '__main__':
         pck_samples = []
         # thresholds are expressed in "fraction of distance across bounding
         # box", so only really low thresholds are relevant
-        thresholds = np.linspace(0.001, 0.05, 100)
+        thresholds = np.linspace(0.0001, 0.015, 100)
         for group_name, joints in pck_joints.items():
             group_pcks = pck(flat_2d_true, flat_2d_pred, flat_mask, joints,
                              flat_scales, thresholds)
