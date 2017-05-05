@@ -164,11 +164,14 @@ def plot_xtype_thresh(data_table, all_thresholds, all_times, method_labels,
                     subplot.plot(all_thresholds, 100 * pck, **kwargs)
 
             # Labels, titles
-            subplot.set_title('%s after %d frames' % (part, time))
-            if args.thresh_is_px:
-                subplot.set_xlabel('Threshold (px)')
-            else:
-                subplot.set_xlabel('Threshold')
+            pl = 'frames' if time != 1 else 'frame'
+            subplot.set_title('%s after %d %s' % (part.title(), time, pl))
+            is_last_row = row == len(sel_times) - 1
+            if is_last_row:
+                if args.thresh_is_px:
+                    subplot.set_xlabel('Threshold (px)')
+                else:
+                    subplot.set_xlabel('Threshold')
             subplot.grid(which='both')
 
             if args.xmax is not None:
@@ -248,7 +251,9 @@ if __name__ == '__main__':
     if args.method_names is None:
         method_labels = args.methods
     else:
-        method_labels = args.method_names
+        # the 10 spaces are in there so that MPL doesn't cut off my plot (yeah,
+        # yeah, you try to fix it "the right way" smartass)
+        method_labels = [n + ' ' * 10 for n in args.method_names]
         assert len(method_labels) == len(args.methods), \
             "'Pretty' method names should match with ordinary ones"
 
@@ -262,8 +267,13 @@ if __name__ == '__main__':
     else:
         raise ValueError('Unknown x-axis type %s' % args.xtype)
 
-    # Deal with y-axis and labels
-    sp_leg.set_ylabel('Accuracy (%)')
+    # Deal with legend, y-axis
+    master_ax = plt.gcf().add_subplot(1, 1, 1)
+    for side in ['top', 'bottom', 'left', 'right']:
+        master_ax.spines[side].set_color('none')
+    master_ax.tick_params(labelcolor='w', top='off', bottom='off', left='off',
+                          right='off')
+    master_ax.set_ylabel('Accuracy (%)')
     sp_leg.set_ylim(ymin=0, ymax=100)
     minor_locator = AutoMinorLocator(2)
     sp_leg.yaxis.set_minor_locator(minor_locator)
@@ -278,7 +288,7 @@ if __name__ == '__main__':
     legend = plt.figlegend(
         handles,
         method_labels,
-        bbox_to_anchor=(1.16, 0.5),
+        bbox_to_anchor=(1.15, 0.5),
         loc="right",
         frameon=False
     )
