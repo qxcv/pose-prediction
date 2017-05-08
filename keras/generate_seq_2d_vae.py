@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-
 """Try to predict only future pose in 2D. Will have to merge with
 generate_seq_act_vae.py."""
 
@@ -22,15 +21,13 @@ import h5py
 from common import VariableScaler, ScaleRamper
 from p2d_loader import preprocess_sequence, reconstruct_poses
 
-
 VAL_FRAC = 0.2
-
 
 np.random.seed(2372143511)
 
 
 def make_decoder(pose_size, seq_length, noise_dim):
-    x = in_layer = Input(shape=(noise_dim,), name='dec_in')
+    x = in_layer = Input(shape=(noise_dim, ), name='dec_in')
     x = Dense(128)(x)
     x = Activation('relu')(x)
     x = Dense(128)(x)
@@ -51,7 +48,7 @@ def make_decoder(pose_size, seq_length, noise_dim):
 
 
 def make_encoder(pose_size, seq_length, noise_dim):
-    x = in_layer = Input(shape=(seq_length, pose_size,), name='enc_in')
+    x = in_layer = Input(shape=(seq_length, pose_size, ), name='enc_in')
     x = TimeDistributed(Dense(128))(x)
     x = Activation('relu')(x)
     x = TimeDistributed(Dense(128))(x)
@@ -98,15 +95,22 @@ def make_vae(pose_size, args):
         copy_weights(saved_decoder, decoder)
 
     # Sample from encoder's output distribution
-    encoder_in = Input(shape=(seq_in_length, pose_size,))
+    encoder_in = Input(shape=(seq_in_length, pose_size, ))
     mean, var = encoder(encoder_in)
-    log_std = Lambda(lambda var: 0.5 * K.log(var), output_shape=(noise_dim,), name='log_std')(var)
-    std = Lambda(lambda var: K.sqrt(var), output_shape=(noise_dim,), name='std')(var)
+    log_std = Lambda(
+        lambda var: 0.5 * K.log(var),
+        output_shape=(noise_dim, ),
+        name='log_std')(var)
+    std = Lambda(
+        lambda var: K.sqrt(var), output_shape=(noise_dim, ), name='std')(var)
+
     def make_noise(layers):  # noqa
         mean, std = layers
-        noise = K.random_normal(shape=K.shape(std), mean=0., std=1.)
+        noise = K.random_normal(shape=K.shape(std), mean=0., stddev=1.)
         return noise * std + mean
-    latent = Lambda(make_noise, name='make_noise', output_shape=(noise_dim,))([mean, std])
+
+    latent = Lambda(
+        make_noise, name='make_noise', output_shape=(noise_dim, ))([mean, std])
 
     # Run latent variables through decoder
     decoder_out = decoder(latent)
@@ -116,14 +120,14 @@ def make_vae(pose_size, args):
         mean, std, log_std = l
         return K.sum(K.square(mean) + std - log_std, axis=1) - noise_dim
 
-    kl_loss = Lambda(kl_inner, output_shape=(None,), name='kl_loss')([mean, std, log_std])
+    kl_loss = Lambda(
+        kl_inner, output_shape=(None, ), name='kl_loss')([mean, std, log_std])
     kl_loss_scale = VariableScaler(1.0, name='kl_scale')(kl_loss)
     # XXX: This is a silly hack to make sure that kl_loss_scale actually
     # appears in the layer list (thereby allowing the scale ramper to access
     # it). Should figure out a more principled way of achieving what I want
     # (changing the balance between several objectives over time).
     decoder_out = Lambda(lambda a: a[0])([decoder_out, kl_loss_scale])
-
 
     def likelihood(true, pred):
         diff = true - pred
@@ -172,10 +176,10 @@ def load_data(data_file, seq_in_length, seq_out_length, seq_skip):
             relposes = preprocess_sequence(poses, parents)
 
             for i in range(len(relposes) - seq_skip * total_seq_len + 1):
-                full_block = relposes[i:i+seq_skip*total_seq_len:seq_skip]
+                full_block = relposes[i:i + seq_skip * total_seq_len:seq_skip]
                 # Input is reversed
                 in_block = full_block[:seq_in_length][::-1]
-                out_block = full_block[len(full_block)-seq_out_length:]
+                out_block = full_block[len(full_block) - seq_out_length:]
 
                 assert in_block.ndim == 2 \
                     and in_block.shape[0] == seq_in_length, in_block.shape
@@ -202,8 +206,10 @@ def load_data(data_file, seq_in_length, seq_out_length, seq_skip):
     val_X = (val_X - mean) / std
     train_Y = (train_Y - mean) / std
     val_Y = (val_Y - mean) / std
-    assert (train_Y[:, :seq_in_length].flatten() == train_X[:, ::-1].flatten()).all()
-    assert (val_Y[:, :seq_in_length].flatten() == val_X[:, ::-1].flatten()).all()
+    assert (train_Y[:, :seq_in_length].flatten() == train_X[:, ::-1].flatten()
+            ).all()
+    assert (
+        val_Y[:, :seq_in_length].flatten() == val_X[:, ::-1].flatten()).all()
 
     return train_X, train_Y, val_X, val_Y, mean, std, parents
 
@@ -231,7 +237,8 @@ def train_model(train_X, train_Y, val_X, val_Y, mean, std, parents, args):
     def sample_trajectories(epoch, logs={}):
         epoch += args.extra_epoch
         poses_to_save = args.poses_to_save
-        gen_poses = decoder.predict(np.random.randn(poses_to_save, args.noise_dim))
+        gen_poses = decoder.predict(
+            np.random.randn(poses_to_save, args.noise_dim))
         gen_poses = gen_poses * std + mean
         gen_poses = reconstruct_poses(gen_poses, parents)
 
@@ -245,13 +252,16 @@ def train_model(train_X, train_Y, val_X, val_Y, mean, std, parents, args):
 
         out_path = path.join(args.pose_dir, 'preds-epoch-%d.mat' % (epoch + 1))
         print('\nSaving samples to', out_path)
-        np.savez(out_path, poses_gen=gen_poses, poses_train=train_poses,
-                 poses_val=val_poses, parents=parents)
+        np.savez(
+            out_path,
+            poses_gen=gen_poses,
+            poses_train=train_poses,
+            poses_val=val_poses,
+            parents=parents)
 
     def model_paths(epoch, logs={}):
-        model_path = path.join(args.model_dir, 'epoch-{epoch:02d}'.format(
-            epoch=epoch
-        ))
+        model_path = path.join(
+            args.model_dir, 'epoch-{epoch:02d}'.format(epoch=epoch))
         encoder_path = model_path + '-enc.h5'
         decoder_path = model_path + '-dec.h5'
         return encoder_path, decoder_path
@@ -291,8 +301,8 @@ def train_model(train_X, train_Y, val_X, val_Y, mean, std, parents, args):
         sub_Y = val_Y[indices]
 
         # 'Extend' baseline
-        ext_preds = sub_Y[:, args.seq_in_length-1:args.seq_in_length]
-        ext_losses = np.mean(np.sum((sub_Y - ext_preds) ** 2, axis=2), axis=0)
+        ext_preds = sub_Y[:, args.seq_in_length - 1:args.seq_in_length]
+        ext_losses = np.mean(np.sum((sub_Y - ext_preds)**2, axis=2), axis=0)
         del ext_preds
 
         # VAE baseline.
@@ -300,7 +310,7 @@ def train_model(train_X, train_Y, val_X, val_Y, mean, std, parents, args):
         vae_losses = np.zeros((sub_Y.shape[0], sub_Y.shape[1], K))
         for i in range(K):
             vae_preds = vae.predict(sub_X)
-            vae_losses[:, :, i] = np.sum((sub_Y - vae_preds) ** 2, axis=2)
+            vae_losses[:, :, i] = np.sum((sub_Y - vae_preds)**2, axis=2)
         vae_mean_of_K = np.mean(np.mean(vae_losses, axis=2), axis=0)
         vae_best_of_K = np.mean(np.min(vae_losses, axis=2), axis=0)
 
@@ -311,7 +321,7 @@ def train_model(train_X, train_Y, val_X, val_Y, mean, std, parents, args):
         fake_X = sub_X[np.random.permutation(len(sub_X))]
         for i in range(K):
             random_preds = vae.predict(fake_X)
-            random_losses[:, :, i] = np.sum((sub_Y - random_preds) ** 2, axis=2)
+            random_losses[:, :, i] = np.sum((sub_Y - random_preds)**2, axis=2)
         random_mean_of_K = np.mean(np.mean(random_losses, axis=2), axis=0)
         random_best_of_K = np.mean(np.min(random_losses, axis=2), axis=0)
 
@@ -336,18 +346,27 @@ def train_model(train_X, train_Y, val_X, val_Y, mean, std, parents, args):
         LambdaCallback(on_epoch_end=save_state),
         # patiences of 10 and 6 should ensure that changes are synchronised
         ReduceLROnPlateau(patience=10),
-        ScaleRamper(patience=6, schedule=args.kl_schedule,
-                    target_name='kl_scale', quantity='val_loss')
+        ScaleRamper(
+            patience=6,
+            schedule=args.kl_schedule,
+            target_name='kl_scale',
+            quantity='val_loss')
     ]
-    vae.fit(train_X, train_Y, validation_data=(val_X, val_Y),
-            shuffle=True, batch_size=args.batch_size, nb_epoch=1000,
-            callbacks=cb_list)
+    vae.fit(
+        train_X,
+        train_Y,
+        validation_data=(val_X, val_Y),
+        shuffle=True,
+        batch_size=args.batch_size,
+        nb_epoch=1000,
+        callbacks=cb_list)
 
     return vae, encoder, decoder
 
 
 # TODO: Things which are probably beneficial:
 # - Adding action features (from Anoop's home dir)
+
 
 def some_floats(str_in):
     """Converts comma-seperated float list to Python float tuple"""
@@ -359,33 +378,77 @@ def some_floats(str_in):
 
 
 parser = ArgumentParser()
-parser.add_argument('--lr', type=float, dest='init_lr', default=0.0001,
-                    help='initial learning rate')
-parser.add_argument('--work-dir', type=str, dest='work_dir', default='./seq-2d-vae',
-                    help='parent directory to store state')
-parser.add_argument('--seq-in-length', type=int, dest='seq_in_length', default=16,
-                    help='length of input sequence')
-parser.add_argument('--seq-out-length', type=int, dest='seq_out_length', default=16,
-                    help='length of sequence to predict (may overlap)')
-parser.add_argument('--save-poses', type=int, dest='poses_to_save', default=32,
-                    help='number of sample poses to save at each epoch')
-parser.add_argument('--seq-skip', type=int, dest='seq_skip', default=3,
-                    help='factor by which to temporally downsample data')
-parser.add_argument('--batch-size', type=int, dest='batch_size', default=64,
-                    help='size of training batch')
-parser.add_argument('--noise-dim', type=int, dest='noise_dim', default=64,
-                    help='number of latent variables')
-parser.add_argument('--data-file', type=str, dest='data_file', default=None,
-                    help='HDF5 file containing poses')
+parser.add_argument(
+    '--lr',
+    type=float,
+    dest='init_lr',
+    default=0.0001,
+    help='initial learning rate')
+parser.add_argument(
+    '--work-dir',
+    type=str,
+    dest='work_dir',
+    default='./seq-2d-vae',
+    help='parent directory to store state')
+parser.add_argument(
+    '--seq-in-length',
+    type=int,
+    dest='seq_in_length',
+    default=16,
+    help='length of input sequence')
+parser.add_argument(
+    '--seq-out-length',
+    type=int,
+    dest='seq_out_length',
+    default=16,
+    help='length of sequence to predict (may overlap)')
+parser.add_argument(
+    '--save-poses',
+    type=int,
+    dest='poses_to_save',
+    default=32,
+    help='number of sample poses to save at each epoch')
+parser.add_argument(
+    '--seq-skip',
+    type=int,
+    dest='seq_skip',
+    default=3,
+    help='factor by which to temporally downsample data')
+parser.add_argument(
+    '--batch-size',
+    type=int,
+    dest='batch_size',
+    default=64,
+    help='size of training batch')
+parser.add_argument(
+    '--noise-dim',
+    type=int,
+    dest='noise_dim',
+    default=64,
+    help='number of latent variables')
+parser.add_argument(
+    '--data-file',
+    type=str,
+    dest='data_file',
+    default=None,
+    help='HDF5 file containing poses')
 # --feat-file is generally used to provide extra context for each frame in the
 # encoder. The aim is to help the model learn better latent featuers.
 # parser.add_argument('--feat-file', type=str, dest='feat_file', default=None,
 #                     help='HDF5 file containing auxiliary, per-frame features')
-parser.add_argument('--kl-schedule', dest='kl_schedule', type=some_floats,
-                    default=(1.0,),
-                    help='KL divergence coefficient (try ramping this up)')
-parser.add_argument('--no-resume', action='store_false', dest='resume', default=True,
-                    help='stop automatic training resumption from checkpoint')
+parser.add_argument(
+    '--kl-schedule',
+    dest='kl_schedule',
+    type=some_floats,
+    default=(1.0, ),
+    help='KL divergence coefficient (try ramping this up)')
+parser.add_argument(
+    '--no-resume',
+    action='store_false',
+    dest='resume',
+    default=True,
+    help='stop automatic training resumption '
+    'from checkpoint')
 
 
 def add_extra_paths(args):
@@ -431,7 +494,8 @@ if __name__ == '__main__':
     print('Loading data')
     seq_length = max(args.seq_in_length, args.seq_out_length)
     train_X, train_Y, val_X, val_Y, mean, std, parents \
-        = load_data(args.data_file, args.seq_in_length, args.seq_out_length, args.seq_skip)
+        = load_data(args.data_file, args.seq_in_length, args.seq_out_length,
+                    args.seq_skip)
     print('Data loaded')
 
     print('Making directories')
@@ -445,10 +509,8 @@ if __name__ == '__main__':
     std_mean_path = path.join(args.meta_dir, 'std_mean.json')
     print('Saving mean/std to %s' % std_mean_path)
     with open(std_mean_path, 'w') as fp:
-        to_dump = {
-            'mean': mean.tolist(),
-            'std': std.tolist()
-        }
+        to_dump = {'mean': mean.tolist(), 'std': std.tolist()}
         json.dump(to_dump, fp)
 
-    model = train_model(train_X, train_Y, val_X, val_Y, mean, std, parents, args)
+    model = train_model(train_X, train_Y, val_X, val_Y, mean, std, parents,
+                        args)

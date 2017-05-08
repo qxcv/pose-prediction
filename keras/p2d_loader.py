@@ -303,6 +303,9 @@ class P2DDataset(object):
                 assert scales.ndim == 1
                 assert len(scales) == len(orig_poses)
 
+                # XXX: this might be the wrong point at which to divide by
+                # scale. In any case, I need to make sure I don't do it again
+                # later.
                 orig_poses = orig_poses.astype('float32') / scales.reshape(
                     (-1, 1, 1))
                 if np.any(np.isnan(orig_poses)) or np.any(
@@ -673,6 +676,11 @@ class P2DDataset(object):
 
         # 2) Undo preprocess_sequence (except for head removal thing;
         #    decapitation is a one-way trip)
+        # XXX: I'm fairly certain that *this* is breaking my evaluation code.
+        # It doesn't keep track of the video names associated with sequences,
+        # so it has no way of adding back the scaling factor required to get
+        # poses in the original coordinate space! Need to fix this somehow so
+        # that I'm consistent in my scaling.
         if vid_name is not None:
             pp_offset = self.videos['pp_offset'][vid_idx]
             pp_scale = self.videos['pp_scale'][vid_idx]

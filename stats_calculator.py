@@ -50,7 +50,9 @@ def pck(true_poses, pred_poses, valid_mask, joints, scales, thresholds=[]):
 
     rv = []
     for threshold in thresholds:
-        under_thresh = dists < (scales[..., None] * threshold)
+        # XXX: I'm effectively dividing by scales *twice* here
+        # under_thresh = dists < (scales[..., None] * threshold)
+        under_thresh = dists < threshold
         sums = np.sum(under_thresh & valid_mask[..., None], axis=0).sum(axis=1)
         # this might yield NaNs, but that's actually okay, because I'm not sure
         # that there's a better way to signal "this result is garbage and I
@@ -144,7 +146,7 @@ if __name__ == '__main__':
         pck_samples = []
         # thresholds are expressed in "fraction of distance across bounding
         # box", so only really low thresholds are relevant
-        thresholds = np.linspace(0.0001, 0.015, 100)
+        thresholds = np.linspace(0, 10, 100)
         for group_name, joints in pck_joints.items():
             group_pcks = pck(flat_2d_true, flat_2d_pred, flat_mask, joints,
                              flat_scales, thresholds)
