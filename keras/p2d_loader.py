@@ -725,7 +725,7 @@ class P2DDataset(object):
                     # right scales are
                     these_inds = frame_inds[row]
                     right_scales = scales[these_inds]
-                    block_row = block_row / right_scales[None, :, None, None]
+                    block_row = block_row * right_scales[None, :, None, None]
 
                 block_rows.append(block_row)
             block = np.concatenate(block_rows, axis=0)
