@@ -303,9 +303,8 @@ class P2DDataset(object):
                 assert scales.ndim == 1
                 assert len(scales) == len(orig_poses)
 
-                # XXX: this might be the wrong point at which to divide by
-                # scale. In any case, I need to make sure I don't do it again
-                # later.
+                # we divide by manually annotated scales BEFORE we do the
+                # preprocess_sequence pass
                 orig_poses = orig_poses.astype('float32') / scales.reshape(
                     (-1, 1, 1))
                 if np.any(np.isnan(orig_poses)) or np.any(
@@ -349,6 +348,10 @@ class P2DDataset(object):
                     'vid_name': vid_name,
                     'mask': mask,
                     'is_val': not is_train,
+                    # pp_scale is produced by preprocess_sequence without
+                    # reference to original sequence scale. scales is given by
+                    # the dataset writing code (probably represents
+                    # hip-shoulder distance)
                     'scales': scales
                 }
                 if self.have_actions:
@@ -489,6 +492,8 @@ class P2DDataset(object):
         frame_skip = self.frame_skip
         out_seqs = []
         scale_seqs = []
+        seq_ids = []
+        frame_num_blocks = []
         if self.has_sparse_annos:
             valid_seqs = []
 
@@ -498,6 +503,7 @@ class P2DDataset(object):
             if self.has_sparse_annos:
                 true_pose_mask = vids['is_true_pose'][vid_idx]
             range_count = len(vid_poses) - frame_skip * tot_len + 1
+            seq_id = vids['vid_name'][vid_idx]
 
             # TODO: need to handle mask, etc., if I'm going to run on Penn
             # Action
@@ -514,18 +520,33 @@ class P2DDataset(object):
                 out_seqs.append(pose_block)
                 scale_block = vid_scales[i:end:frame_skip]
                 scale_seqs.append(scale_block)
+                seq_ids.append(seq_id)
+                frame_num_blocks.append(list(range(i, end, frame_skip)))
 
         all_seqs = np.stack(out_seqs, axis=0)
+        all_nums = np.stack(frame_num_blocks, axis=0)
         assert all_seqs.shape[1] == tot_len
         conditioning = all_seqs[:, :cond_len]
         prediction = all_seqs[:, cond_len:]
         all_scales = np.stack(scale_seqs, axis=0)
         prediction_scales = all_scales[:, cond_len:]
-        rv = (conditioning, prediction, prediction_scales)
+        prediction_nums = all_nums[:, cond_len:]
+        conditioning_scales = all_scales[:, :cond_len]
+        conditioning_nums = all_nums[:, :cond_len]
+        assert prediction_nums.shape == prediction.shape[:2]
+        rv = {
+            'seq_ids': np.asarray(seq_ids),
+            'conditioning': conditioning,
+            'conditioning_scales': conditioning_scales,
+            'conditioning_frame_nums': conditioning_nums,
+            'prediction': prediction,
+            'prediction_scales': prediction_scales,
+            'prediction_frame_nums': prediction_nums
+        }
         if self.has_sparse_annos:
             all_valids = np.stack(valid_seqs, axis=0)
             prediction_valids = all_valids[:, cond_len:]
-            rv += (prediction_valids, )
+            rv['prediction_valids'] = prediction_valids
 
         return rv
 
@@ -660,7 +681,7 @@ class P2DDataset(object):
 
         return completions
 
-    def reconstruct_poses(self, rel_block, vid_name=None):
+    def reconstruct_poses(self, rel_block, vid_names=None, frame_inds=None):
         assert rel_block.ndim == 3 \
             and rel_block.shape[-1] == 2 * len(self.parents), \
             rel_block.shape
@@ -669,37 +690,48 @@ class P2DDataset(object):
         rel_block = rel_block * self.std[None, ...] \
             + self.mean[None, ...]
 
-        if vid_name is not None:
-            # will fail if there are duplicate video names (maybe I should fix
-            # this...)
-            vid_idx = int(np.argwhere(self.videos['vid_name'] == vid_name))
-
         # 2) Undo preprocess_sequence (except for head removal thing;
         #    decapitation is a one-way trip)
-        # XXX: I'm fairly certain that *this* is breaking my evaluation code.
-        # It doesn't keep track of the video names associated with sequences,
-        # so it has no way of adding back the scaling factor required to get
-        # poses in the original coordinate space! Need to fix this somehow so
-        # that I'm consistent in my scaling.
-        if vid_name is not None:
-            pp_offset = self.videos['pp_offset'][vid_idx]
-            pp_scale = self.videos['pp_scale'][vid_idx]
-            block = _reconstruct_poses(
-                rel_block,
-                self.parents,
-                pp_offset,
-                pp_scale,
-                head_vel=self.head_vel)
+        if vid_names is not None:
+            vid_names = np.asarray(vid_names)
+            ex_shape = (len(rel_block),)
+            assert vid_names.shape == ex_shape, \
+                "Expected vid_names to be shape %s, but was %s" \
+                % (ex_shape, vid_names.shape)
+            block_rows = []
+            for row in range(rel_block.shape[0]):
+                row_name = vid_names[row]
+                vid_idx = int(np.argwhere(self.videos['vid_name'] == row_name))
+                # this undoes the automatic scaling
+                pp_offset = self.videos['pp_offset'][vid_idx]
+                pp_scale = self.videos['pp_scale'][vid_idx]
+                block_row = _reconstruct_poses(
+                    rel_block[row:row+1],
+                    self.parents,
+                    pp_offset,
+                    pp_scale,
+                    head_vel=self.head_vel)
+
+                # now undo the manual scaling
+                scales = self.videos['scales'][vid_idx]
+                if frame_inds is None:
+                    vid_scale = scales.mean()
+                    if not np.all(np.abs(scales == vid_scale) < 1e-5):
+                        print(('WARNING! Using one scale for entire video %s, '
+                               'but scales differ between frames!') % row_name)
+                    block_row = block_row * vid_scale
+                else:
+                    # otherwise we can use frame indices to figure out what
+                    # right scales are
+                    these_inds = frame_inds[row]
+                    right_scales = scales[these_inds]
+                    block_row = block_row / right_scales[None, :, None, None]
+
+                block_rows.append(block_row)
+            block = np.concatenate(block_rows, axis=0)
         else:
             block = _reconstruct_poses(
                 rel_block, self.parents, head_vel=self.head_vel)
-
-        # 3) Undo video-specific scaling, if necessary
-        if vid_name is not None:
-            scales = self.videos['scales'][vid_idx]
-            print('WARNING! Using one scale for entire video %s' % vid_name)
-            vid_scale = scales.mean()
-            block = block * vid_scale
 
         assert block.shape == rel_block.shape[:2] + (2, len(self.parents)), \
             block.shape

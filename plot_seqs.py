@@ -39,7 +39,7 @@ class SequencePlotter(object):
         if self.action_labels is not None:
             self.label_handles = []
         for spi in range(self.N):
-            if is_3d:
+            if self.is_3d:
                 ax = self.fig.add_subplot(rows, cols, spi + 1, projection='3d')
             else:
                 ax = self.fig.add_subplot(rows, cols, spi + 1)
@@ -105,6 +105,8 @@ class SequencePlotter(object):
 
 
 class SequencePlotter2D(SequencePlotter):
+    is_3d = False
+
     def __init__(self,
                  *args,
                  parents=None,
@@ -121,19 +123,6 @@ class SequencePlotter2D(SequencePlotter):
 
         assert parents is not None, "Need parents to draw poses!"
         self.parents = parents
-
-        # load frames, if necessary
-        if self.frame_paths is not None:
-            assert self.frames is None, \
-                'can only handle one of {frames,frame_paths}'
-            lazy = any(len(f) > 100 for f in self.frame_paths)
-            if not lazy:
-                # load all images ahead of time for smooth animation
-                self.frames = {}
-                for subseq_paths in self.frame_paths:
-                    for frame_path in subseq_paths:
-                        if frame_path not in self.frames:
-                            self.frame_paths[frame_path] = imread(frame_path)
 
         self.make_anim()
 
@@ -173,13 +162,23 @@ class SequencePlotter2D(SequencePlotter):
             line, = ax.plot(x_data, y_data)
             lines.append(line)
 
+        if frame is not None:
+            # if there's an image frame then we don't want to see anything else
+            # except the image and the pose (no ticks, no blank padding, etc.)
+            # I expected ax.imshow() would handle this, but I guess not
+            ax.set_axis_off()
+            ax.axis('image')
+            ax.set_xlim([0, frame.shape[1]])
+            ax.set_ylim([0, frame.shape[0]])
+            ax.invert_yaxis()
+
     def draw_subsequent(self, sequence_id, frame_number):
         pose = self.sequences[sequence_id][frame_number]
         handles = self.mpl_handles[sequence_id]
         lines = handles['lines']
         redrawn = []
         # one line per edge, so no line for the parent
-        assert len(parents) == len(lines) + 1
+        assert len(self.parents) == len(lines) + 1
 
         frame = self.get_frame(sequence_id, frame_number)
         if frame is not None:
@@ -187,9 +186,9 @@ class SequencePlotter2D(SequencePlotter):
             handle.set_data(frame)
             redrawn.append(handle)
 
-        for joint in range(1, len(parents)):
+        for joint in range(1, len(self.parents)):
             joint_coord = pose[:, joint]
-            parent = parents[joint]
+            parent = self.parents[joint]
             parent_coord = pose[:, parent]
             line = lines[joint - 1]
             line.set_xdata((parent_coord[0], joint_coord[0]))
@@ -209,6 +208,8 @@ class SequencePlotter2D(SequencePlotter):
 
 class SequencePlotter3D(SequencePlotter):
     """Plots several sequences of 3D skeletons in (x,y,z) parameterisation."""
+
+    is_3d = True
 
     def __init__(self, *args, parents=None, bone_lengths=None, **kwargs):
         super().__init__(*args, **kwargs)

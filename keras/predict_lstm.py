@@ -82,7 +82,7 @@ def train_model(train_X,
     estop = EarlyStopping(min_delta=0, patience=250)
     sig = train_X.std()
     ramper = GaussianRamper(
-        patience=50,
+        patience=4,
         schedule=sig * np.array([1e-6, 0.001, 0.002, 0.004, 0.008, 0.01,
                                  0.05]))
     callbacks = [mod_check, estop, ramper]

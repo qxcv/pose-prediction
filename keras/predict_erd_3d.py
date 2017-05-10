@@ -92,8 +92,7 @@ def train_model(train_X,
     print('Fitting to data')
     mod_check = ModelCheckpoint(save_path, save_best_only=True)
     estop = EarlyStopping(min_delta=0, patience=100)
-    # TODO: Patience should be higher.
-    ramper = GaussianRamper(patience=10, schedule=NOISE_SCHEDULE)
+    ramper = GaussianRamper(patience=4, schedule=NOISE_SCHEDULE)
     callbacks = [mod_check, estop, ramper]
     model.fit(
         train_X,

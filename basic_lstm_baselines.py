@@ -136,10 +136,13 @@ def write_baseline(cache_dir, dataset, steps_to_predict, method):
         pred_usable = pred_scales = None
     else:
         evds = dataset.get_ds_for_eval(train=False)
+        cond_on = evds['conditioning']
+        pred_on = evds['prediction']
+        pred_scales = evds['prediction_scales']
         if dataset.has_sparse_annos:
-            cond_on, pred_on, pred_scales, pred_usable = evds
+            # hmm, the next key might be wrong (haven't tested)
+            pred_usable = evds['prediction_valids']
         else:
-            cond_on, pred_on, pred_scales = evds
             pred_usable = None
         extra_data['pck_joints'] = dataset.pck_joints
         pred_on_orig = f32(dataset.reconstruct_poses(pred_on))
