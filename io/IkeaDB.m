@@ -118,11 +118,13 @@ classdef IkeaDB < handle
             for i=nonempty
                 tmp2_id = obj.data(i).video_id;
                 ins_poses = obj.data(i).test_poses;
+                % test poses are crop-box-relative
+                ins_poses_remap = obj.unmap_pose(ins_poses, i);
                 ins_inds = obj.data(i).test_pose_inds;
                 old_poses = obj.poses{tmp2_id};
-                assert(size(old_poses, 1) == size(ins_poses, 1));
-                assert(size(old_poses, 2) == size(ins_poses, 2));
-                old_poses(:, :, ins_inds) = ins_poses;
+                assert(size(old_poses, 1) == size(ins_poses_remap, 1));
+                assert(size(old_poses, 2) == size(ins_poses_remap, 2));
+                old_poses(:, :, ins_inds) = ins_poses_remap;
                 obj.poses{tmp2_id} = old_poses;
             end
         end
