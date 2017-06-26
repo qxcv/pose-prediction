@@ -17,8 +17,8 @@ class SequencePlotter(object):
     """Base class for animating 2D or 3D poses in a grid."""
 
     def __init__(self,
-                 title,
-                 sequences,
+                 title=None,
+                 sequences=None,
                  action_labels=None,
                  subplot_titles=None,
                  fps=15,
@@ -29,7 +29,8 @@ class SequencePlotter(object):
         self.sequences = sequences
         self.N, self.T = self.sequences.shape[:2]
         self.fig = plt.figure()
-        self.fig.suptitle(title)
+        if title is not None:
+            self.fig.suptitle(title)
 
         # Arrange plots in a square
         cols = int(np.ceil(np.sqrt(self.N)))
@@ -55,7 +56,18 @@ class SequencePlotter(object):
                 self.label_handles.append(text_h)
 
             if self.subplot_titles is not None:
-                ax.set_title(self.subplot_titles[spi])
+                title = self._get_title(spi, 0)
+                ax.set_title(title)
+
+    def _get_title(self, spi, frame):
+        title = self.subplot_titles[spi]
+        if isinstance(title, str):
+            return title
+        # otherwise assume it's tuple or list (before/after crossover)
+        before, after = title
+        if frame >= self.crossover:
+            return after
+        return before
 
     def make_anim(self):
         self.animation = anim.FuncAnimation(
@@ -94,6 +106,9 @@ class SequencePlotter(object):
                     spine.set_linewidth(6)
                     spine.set_color(colour)
                     redrawn.append(spine)
+                if self.subplot_titles is not None:
+                    title = self._get_title(spi, frame_number)
+                    redrawn.append(ax.set_title(title))
 
         return redrawn
 
@@ -152,6 +167,7 @@ class SequencePlotter2D(SequencePlotter):
             handles['image'] = ax.imshow(frame)
 
         lines = handles['lines'] = []
+        colours = ['magenta', 'orange', 'yellow', 'lime', 'aqua', 'red']
         for joint in range(1, len(self.parents)):
             # plot actual skeleton
             joint_coord = pose[:, joint]
@@ -159,7 +175,8 @@ class SequencePlotter2D(SequencePlotter):
             parent_coord = pose[:, parent]
             x_data = (parent_coord[0], joint_coord[0])
             y_data = (parent_coord[1], joint_coord[1])
-            line, = ax.plot(x_data, y_data)
+            colour = colours[joint % len(colours)]
+            line, = ax.plot(x_data, y_data, linewidth=2, color=colour)
             lines.append(line)
 
         if frame is not None:
@@ -297,6 +314,8 @@ if __name__ == '__main__':
         data_keys = sorted(
             [k for k in loaded.keys() if k.startswith('skeletons_')])
     print('Keys:', ', '.join(data_keys))
+
+    plt.rcParams['image.cmap'] = 'paired'
 
     plotters = []
     for key in data_keys:

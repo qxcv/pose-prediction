@@ -136,7 +136,8 @@ def _reconstruct_poses(flat_poses,
                        parents,
                        pp_offset=None,
                        pp_scale=None,
-                       head_vel=True):
+                       head_vel=True,
+                       init_poses=None):
     """Undo parent-relative joint transform. Will not undo the uniform scaling
     applied to each sequence."""
     # shape of poses shold be (num training samples)*(time)*(flattened
@@ -150,6 +151,10 @@ def _reconstruct_poses(flat_poses,
 
     # rel_poses is a 4D array: (num samples)*T*(XY)*J
     rel_poses = flat_poses.reshape(flat_poses.shape[:2] + (2, -1))
+    if init_poses is not None:
+        # should be (num samples)*D
+        assert init_poses.shape == (flat_poses.shape[0], flat_poses.shape[-1])
+        init_poses_shaped = init_poses.reshape(init_poses.shape[:1] + (2, -1))
     true_poses = np.zeros_like(rel_poses)
     N, T, Dxy, J = true_poses.shape
     assert Dxy == 2
@@ -158,7 +163,17 @@ def _reconstruct_poses(flat_poses,
     # start by restoring head from velocity param, if necessary
     if head_vel:
         rel_heads = rel_poses[:, :, :, 0]
-        true_heads = np.cumsum(rel_heads, axis=1)
+        if init_poses is None:
+            print("WARNING: you've used previous-frame-relative "
+                  "parameterisation for the head without specifying an "
+                  "initial position. This is probably a bug.")
+            true_heads = np.cumsum(rel_heads, axis=1)
+        else:
+            # init_poses_shaped is (num samples)*(XY)*J, but rel_heads is (num
+            # samples)*T*(XY), so we need to insert the None to broadcast out.
+            init_head_locs = init_poses_shaped[:, None, :, 0]
+            rel_heads[:, 0] = init_head_locs
+            true_heads = np.cumsum(rel_heads, axis=1)
         true_poses[:, :, :, 0] = true_heads
     else:
         true_poses[:, :, :, 0] = rel_poses[:, :, :, 0]
@@ -297,6 +312,9 @@ class P2DDataset(object):
                 sfact_path = '/seqs/' + vid_name + '/scale'
                 if sfact_path in fp:
                     scales = fp[sfact_path].value
+                    if np.isscalar(scales):
+                        # single float, expand out
+                        scales = np.full((len(orig_poses), ), scales)
                 else:
                     scales = np.ones((len(orig_poses), ))
 
@@ -705,12 +723,24 @@ class P2DDataset(object):
                 # this undoes the automatic scaling
                 pp_offset = self.videos['pp_offset'][vid_idx]
                 pp_scale = self.videos['pp_scale'][vid_idx]
+                if self.head_vel and frame_inds is not None:
+                    # need to figure out where head is at the beginning of each
+                    # sequence
+                    # vid_names will be shape (N,); frame_inds will be shape
+                    # (N,T); rel_block will be (N,T,D)
+                    first_frame = frame_inds[row, 0]
+                    # poses are T'*D (T' is different to T)
+                    first_pose = self.videos['poses'][vid_idx][first_frame]
+                    init_poses = first_pose[None]
+                else:
+                    init_poses = None
                 block_row = _reconstruct_poses(
                     rel_block[row:row+1],
                     self.parents,
                     pp_offset,
                     pp_scale,
-                    head_vel=self.head_vel)
+                    head_vel=self.head_vel,
+                    init_poses=init_poses)
 
                 # now undo the manual scaling
                 scales = self.videos['scales'][vid_idx]
