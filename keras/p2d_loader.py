@@ -97,6 +97,8 @@ def preprocess_sequence(poses,
 
     if hrm_mat is not None:
         assert hrm_mat.ndim == 2
+        assert not head_vel, \
+            "Relative head position not meaningful after decapitation"
         # poses is T*(XY)*J, and hrm_mat is J'*J. We want to get back a
         # T*(XY)*J' array (i.e. go down the vectors in the last dimension and
         # multiply by them).
@@ -110,6 +112,9 @@ def preprocess_sequence(poses,
     offset = np.mean(np.mean(poses, axis=2), axis=0).reshape((1, 2, 1))
     norm_poses = (poses - offset) / scale
 
+    # will be updated below if necessary
+    head_locs = None
+
     if parents is not None:
         # Compute actual data (relative offsets are easier to learn)
         relpose = np.zeros_like(norm_poses)
@@ -117,6 +122,10 @@ def preprocess_sequence(poses,
             # Record delta from frame which is <skip> steps in the past
             relpose[skip:, :, 0] \
                 = norm_poses[skip:, :, 0] - norm_poses[:-skip, :, 0]
+            # (x, y) position that head starts in
+            # required for head reconstruction when using a velocity-based head
+            # parameterisation
+            head_locs = norm_poses[:, :, 0]
         else:
             relpose[:, :, 0] = norm_poses[:, :, 0]
         # Other norm_poses record delta from parents
@@ -129,7 +138,7 @@ def preprocess_sequence(poses,
     else:
         shaped = poses.reshape((norm_poses.shape[0], -1))
 
-    return shaped, offset, scale
+    return shaped, offset, scale, head_locs
 
 
 def _reconstruct_poses(flat_poses,
@@ -137,7 +146,7 @@ def _reconstruct_poses(flat_poses,
                        pp_offset=None,
                        pp_scale=None,
                        head_vel=True,
-                       init_poses=None):
+                       init_head_locs=None):
     """Undo parent-relative joint transform. Will not undo the uniform scaling
     applied to each sequence."""
     # shape of poses shold be (num training samples)*(time)*(flattened
@@ -151,10 +160,6 @@ def _reconstruct_poses(flat_poses,
 
     # rel_poses is a 4D array: (num samples)*T*(XY)*J
     rel_poses = flat_poses.reshape(flat_poses.shape[:2] + (2, -1))
-    if init_poses is not None:
-        # should be (num samples)*D
-        assert init_poses.shape == (flat_poses.shape[0], flat_poses.shape[-1])
-        init_poses_shaped = init_poses.reshape(init_poses.shape[:1] + (2, -1))
     true_poses = np.zeros_like(rel_poses)
     N, T, Dxy, J = true_poses.shape
     assert Dxy == 2
@@ -163,15 +168,15 @@ def _reconstruct_poses(flat_poses,
     # start by restoring head from velocity param, if necessary
     if head_vel:
         rel_heads = rel_poses[:, :, :, 0]
-        if init_poses is None:
+        if init_head_locs is None:
             print("WARNING: you've used previous-frame-relative "
                   "parameterisation for the head without specifying an "
                   "initial position. This is probably a bug.")
             true_heads = np.cumsum(rel_heads, axis=1)
         else:
-            # init_poses_shaped is (num samples)*(XY)*J, but rel_heads is (num
-            # samples)*T*(XY), so we need to insert the None to broadcast out.
-            init_head_locs = init_poses_shaped[:, None, :, 0]
+            # should be (num samples)*(XY)
+            assert init_head_locs.shape == (flat_poses.shape[0], 2)
+            # rel_heads is (num samples)*T*(XY), so this works fine
             rel_heads[:, 0] = init_head_locs
             true_heads = np.cumsum(rel_heads, axis=1)
         true_poses[:, :, :, 0] = true_heads
@@ -329,14 +334,14 @@ class P2DDataset(object):
                         np.abs(orig_poses) > 1e5):
                     print('Rejecting %s (invalid or too big)' % vid_name)
                     continue
-                # don't both with relative poses
-                norm_poses, pp_offset, pp_scale = preprocess_sequence(
-                    orig_poses,
-                    self.frame_skip,
-                    self.parents if self.relative else None,
-                    smooth_sigma=2,
-                    head_vel=head_vel,
-                    hrm_mat=hrm_mat)
+                norm_poses, pp_offset, pp_scale, head_locs \
+                    = preprocess_sequence(
+                        orig_poses,
+                        self.frame_skip,
+                        self.parents if self.relative else None,
+                        smooth_sigma=2,
+                        head_vel=head_vel,
+                        hrm_mat=hrm_mat)
                 norm_poses = norm_poses.astype('float32')
                 # make sure we don't reuse poses in native parameterisation
                 del orig_poses
@@ -370,7 +375,8 @@ class P2DDataset(object):
                     # reference to original sequence scale. scales is given by
                     # the dataset writing code (probably represents
                     # hip-shoulder distance)
-                    'scales': scales
+                    'scales': scales,
+                    'head_locs': head_locs
                 }
                 if self.have_actions:
                     vid_meta['actions'] = actions
@@ -712,7 +718,7 @@ class P2DDataset(object):
         #    decapitation is a one-way trip)
         if vid_names is not None:
             vid_names = np.asarray(vid_names)
-            ex_shape = (len(rel_block),)
+            ex_shape = (len(rel_block), )
             assert vid_names.shape == ex_shape, \
                 "Expected vid_names to be shape %s, but was %s" \
                 % (ex_shape, vid_names.shape)
@@ -724,23 +730,22 @@ class P2DDataset(object):
                 pp_offset = self.videos['pp_offset'][vid_idx]
                 pp_scale = self.videos['pp_scale'][vid_idx]
                 if self.head_vel and frame_inds is not None:
-                    # need to figure out where head is at the beginning of each
-                    # sequence
+                    # figure out where head is initially
                     # vid_names will be shape (N,); frame_inds will be shape
                     # (N,T); rel_block will be (N,T,D)
                     first_frame = frame_inds[row, 0]
                     # poses are T'*D (T' is different to T)
-                    first_pose = self.videos['poses'][vid_idx][first_frame]
-                    init_poses = first_pose[None]
+                    first_head = self.videos['head_locs'][vid_idx][first_frame]
+                    init_head_locs = first_head[None]
                 else:
-                    init_poses = None
+                    init_head_locs = None
                 block_row = _reconstruct_poses(
-                    rel_block[row:row+1],
+                    rel_block[row:row + 1],
                     self.parents,
                     pp_offset,
                     pp_scale,
                     head_vel=self.head_vel,
-                    init_poses=init_poses)
+                    init_head_locs=init_head_locs)
 
                 # now undo the manual scaling
                 scales = self.videos['scales'][vid_idx]
