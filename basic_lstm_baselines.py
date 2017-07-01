@@ -10,7 +10,7 @@ import os  # noqa: E402
 
 import h5py  # noqa: E402
 import numpy as np  # noqa: E402
-from keras.models import load_model  # noqa: E402
+from keras.models import Model, load_model  # noqa: E402
 from tqdm import tqdm  # noqa: E402
 
 from common import CUSTOM_OBJECTS  # noqa: E402
@@ -18,6 +18,7 @@ from p2d_loader import P2DDataset, P3DDataset  # noqa: E402
 import predict_erd_3d as perd  # noqa: E402
 import predict_lstm_3lr as pl3lr  # noqa: E402
 import predict_lstm as plstm  # noqa: E402
+import predict_gan as pgan  # noqa: E402
 
 MASK_VALUE = 0.0
 
@@ -85,43 +86,54 @@ def generic_caching_baseline(module, identifier, cache_dir, dataset):
     # convert the training model to an eval model
     if os.path.exists(model_path):
         print("Loading model for %s from '%s'" % (identifier, model_path))
-        mod_train = load_model(model_path, CUSTOM_OBJECTS)
+        if hasattr(module, 'load_eval_model'):
+            # GANs (and maybe other models) have weird loaders because they
+            # save many models at train time (i.e. generator and discriminator)
+            mod_train = module.load_eval_model(model_path, CUSTOM_OBJECTS)
+        else:
+            mod_train = load_model(model_path, CUSTOM_OBJECTS)
     else:
         print("Training model for %s anew (will save to '%s')" %
               (identifier, model_path))
         mod_train = train_model(module, model_path, dataset)
 
     mod_pred = module.make_model_predict(mod_train, mask_value=MASK_VALUE)
-
-    # get a prediction wrapper
-    # pass it some conditioning poses and a number of steps to predict, and it
-    # will return you that many predicted steps (MAGIC!)
-    def wrapper(in_tensor, steps_to_predict):
-        assert in_tensor.ndim == 3, \
-            "Expecting N*T*D tensor, got %s" % (in_tensor.shape,)
-        # model batch size and number of steps is 1/1
-        # TODO: if this is slow then you will have to fix it by increasing
-        # batch size and increasing number of steps, then writing a wrapper to
-        # put everything in the correct shape. Keras isn't very helpful here :/
-        out_shape = (in_tensor.shape[0], steps_to_predict, in_tensor.shape[2])
-        out_tensor = np.zeros(out_shape, dtype='float32')
-        for n in tqdm(range(in_tensor.shape[0])):
-            mod_pred.reset_states()
-            # condition on input
-            for t in range(in_tensor.shape[1]):
-                input = in_tensor[n:n + 1, t:t + 1]
-                result = mod_pred.predict_on_batch(input)
-            # put only last prediction from input sequence in tensor
-            out_tensor[n:n + 1, :1] = result
-            # now predict rest of output sequence
-            for t in range(1, steps_to_predict):
-                input = out_tensor[n:n + 1, t - 1:t]
-                result = mod_pred.predict_on_batch(input)
-                out_tensor[n:n + 1, t:t + 1] = result
-        return out_tensor
-
-    wrapper.method_name = identifier
-    return wrapper
+    if isinstance(mod_pred, Model):
+        # Get a prediction wrapper, in the case that we just have a
+        # step-by-step Keras model to do prediction. Pass it some conditioning
+        # poses and a number of steps to predict, and it will return you that
+        # many predicted steps (MAGIC!)
+        def wrapper(in_tensor, steps_to_predict):
+            assert in_tensor.ndim == 3, \
+                "Expecting N*T*D tensor, got %s" % (in_tensor.shape,)
+            # model batch size and number of steps is 1/1
+            # TODO: if this is slow then you will have to fix it by increasing
+            # batch size and increasing number of steps, then writing a wrapper
+            # to put everything in the correct shape. Keras isn't very helpful
+            # here :/
+            out_shape = (in_tensor.shape[0], steps_to_predict,
+                         in_tensor.shape[2])
+            out_tensor = np.zeros(out_shape, dtype='float32')
+            for n in tqdm(range(in_tensor.shape[0])):
+                mod_pred.reset_states()
+                # condition on input
+                for t in range(in_tensor.shape[1]):
+                    input = in_tensor[n:n + 1, t:t + 1]
+                    result = mod_pred.predict_on_batch(input)
+                # put only last prediction from input sequence in tensor
+                out_tensor[n:n + 1, :1] = result
+                # now predict rest of output sequence
+                for t in range(1, steps_to_predict):
+                    input = out_tensor[n:n + 1, t - 1:t]
+                    result = mod_pred.predict_on_batch(input)
+                    out_tensor[n:n + 1, t:t + 1] = result
+            return out_tensor
+        wrapper.method_name = identifier
+        return wrapper
+    # otherwise it's handled for us
+    if not hasattr(mod_pred, 'method_name'):
+        mod_pred.method_name = identifier
+    return mod_pred
 
 
 def write_baseline(cache_dir, dataset, steps_to_predict, method):
@@ -139,13 +151,20 @@ def write_baseline(cache_dir, dataset, steps_to_predict, method):
         cond_on = evds['conditioning']
         pred_on = evds['prediction']
         pred_scales = evds['prediction_scales']
+        cond_scales = evds['conditioning_scales']
         if dataset.has_sparse_annos:
             # hmm, the next key might be wrong (haven't tested)
             pred_usable = evds['prediction_valids']
         else:
             pred_usable = None
+        seq_ids = evds['seq_ids']
+        pred_frame_numbers = evds['prediction_frame_nums']
+        cond_frame_numbers = evds['conditioning_frame_nums']
         extra_data['pck_joints'] = dataset.pck_joints
-        pred_on_orig = f32(dataset.reconstruct_poses(pred_on))
+        pred_on_orig = f32(
+            dataset.reconstruct_poses(pred_on, seq_ids, pred_frame_numbers))
+        cond_on_orig = f32(
+            dataset.reconstruct_poses(cond_on, seq_ids, cond_frame_numbers))
 
     if pred_usable is None:
         pred_usable = np.ones(pred_on_orig.shape[:2], dtype=bool)
@@ -157,7 +176,8 @@ def write_baseline(cache_dir, dataset, steps_to_predict, method):
     if dataset.is_3d:
         result = f32(dataset.reconstruct_skeletons(result))
     else:
-        result = f32(dataset.reconstruct_poses(result))
+        result = f32(
+            dataset.reconstruct_poses(result, seq_ids, pred_frame_numbers))
     # insert an extra axis
     result = result[:, None]
     assert (result.shape[0],) + result.shape[2:] == pred_on_orig.shape, \
@@ -183,12 +203,40 @@ def write_baseline(cache_dir, dataset, steps_to_predict, method):
                 compression='gzip',
                 shuffle=True,
                 data=pred_on_orig)
+            fp.create_dataset(
+                '/poses_2d_cond_true',
+                compression='gzip',
+                shuffle=True,
+                data=cond_on_orig)
             fp['/scales_2d'] = f32(pred_scales)
+            fp['/scales_2d_cond'] = f32(cond_scales)
+            # TODO: is there a more meaningful notion of "predicted
+            # conditioning pose" (poses_2d_cond_pred) for these models? For the
+            # DKF we basically need to push the whole conditioning sequence
+            # through a DKF, so we can see its repro of the prefix sequence.
             fp.create_dataset(
                 '/poses_2d_pred',
                 compression='gzip',
                 shuffle=True,
                 data=result)
+            # make samples axis match for originals
+            new_cond_orig_shape = (1, ) + result.shape[1:2] \
+                + (1, ) * (cond_on_orig.ndim - 1)
+            cond_on_tiled = np.tile(cond_on_orig[:, None], new_cond_orig_shape)
+            fp.create_dataset(
+                '/poses_2d_cond_pred',
+                compression='gzip',
+                shuffle=True,
+                data=cond_on_tiled)
+            fp.create_dataset(
+                '/pred_frame_numbers_2d',
+                compression='gzip',
+                data=pred_frame_numbers)
+            fp.create_dataset(
+                '/cond_frame_numbers_2d',
+                compression='gzip',
+                data=cond_frame_numbers)
+            fp['/seq_ids_2d_json'] = json.dumps(seq_ids.tolist())
         fp['/is_usable'] = pred_usable
         fp['/extra_data'] = json.dumps(extra_data)
 
@@ -197,6 +245,7 @@ NETWORK_MODULES = {
     'erd': perd,
     'lstm3lr': pl3lr,
     'lstm': plstm,
+    'gan': pgan,
 }
 NETWORK_MODULE_CHOICES = sorted(NETWORK_MODULES.keys())
 
