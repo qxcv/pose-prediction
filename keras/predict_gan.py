@@ -2,6 +2,7 @@
 """Predict a sequence of poses with a recurrent GAN. I don't anticipate that
 this will work."""
 
+from keras import backend as K
 from keras.models import load_model, Model
 from keras.layers import Dense, Activation, LSTM, Input, RepeatVector, \
     Bidirectional, Concatenate
@@ -11,7 +12,9 @@ import numpy as np
 from os import path, makedirs, listdir
 import re
 
-K = 5
+WGAN = True  # change this at will
+# TODO: should train to convergence, not just for fixed number of iterations
+DISCS_PER_GEN = 30 if WGAN else 5
 
 
 def make_generator(in_length, out_length, noise_dim, pose_size):
@@ -41,15 +44,29 @@ def make_discriminator(cond_seq_length, gan_seq_length, pose_size):
     x = Concatenate()([x, in_gan])
     # XXX: bidirectional LSTM is probably a terrible idea because it creates
     # representational asymmetry between generator and discriminator
-    x = Bidirectional(LSTM(256, return_sequences=True))(x)
-    x = Bidirectional(LSTM(256))(x)
+    x = LSTM(256, return_sequences=True)(x)
+    x = LSTM(256)(x)
     x = Dense(1)(x)
-    # FIXME: for WGAN this will be unnecessary
-    out_layer = Activation('sigmoid')(x)
+    if WGAN:
+        out_layer = x
+    else:
+        out_layer = Activation('sigmoid')(x)
 
     model = Model(inputs=[in_cond, in_gan], outputs=[out_layer])
 
     return model
+
+
+def base_wasserstein_loss(u, v):
+    return K.mean(K.batch_dot(u, v))
+
+def make_wasserstein_loss(lam):
+    # for example of improved WGAN in Keras, see
+    # https://github.com/farizrahman4u/keras-contrib/blob/master/examples/improved_wgan.py
+    def wasserstein_loss(u, v):
+        base_loss = base_wasserstein_loss(u, v)
+        return base_loss + lam * grad_penalty
+    return wasserstein_loss
 
 
 class GANTrainer:
@@ -85,12 +102,16 @@ class GANTrainer:
         disc_out = self.discriminator_copy([in_cond, gan_out])
         nested = Model(inputs=[in_cond, in_noise], outputs=[disc_out])
         gen_opt = RMSprop(lr=g_lr, clipnorm=1.0)
-        # FIXME: this objective will be different for WGAN
-        # see https://github.com/tdeboissiere/DeepLearningImplementations/blob/master/WassersteinGAN/src/model/models_WGAN.py#L18-L21
-        # WGAN loss can easily be implemented using +1/-1 labels and a dot
-        # product objective
-        nested.compile(
-            gen_opt, 'binary_crossentropy', metrics=['binary_accuracy'])
+        if WGAN:
+            # The objective will be different for WGAN
+            # see https://github.com/tdeboissiere/DeepLearningImplementations/blob/master/WassersteinGAN/src/model/models_WGAN.py#L18-L21
+            # WGAN loss can easily be implemented using +1/-1 labels and a dot
+            # product objective.
+            assert False, "this is broken, still need gradient penalty"
+            nested.compile(gen_opt, wasserstein_loss)
+        else:
+            nested.compile(
+                gen_opt, 'binary_crossentropy', metrics=['binary_accuracy'])
         self.nested_generator = nested
 
         self.num_disc_steps = 0
@@ -127,9 +148,12 @@ class GANTrainer:
         # we will replace the first half of the batch with random junk
         junk_count = len(true_batch_X) // 2
         poses = self.generate_poses(true_batch_X[:junk_count])
-        # fakes get a zero, true values get a 1
+        # fakes get a zero (GAN) or -1 (WGAN), true values get a 1
         labels = np.ones((len(true_batch_X), ))
-        labels[:junk_count] = 0
+        if WGAN:
+            labels[:junk_count] = -1
+        else:
+            labels[:junk_count] = 0
         gen_poses = np.concatenate([poses, true_batch_Y[junk_count:]], axis=0)
         self.num_disc_steps += 1
         # get back loss
@@ -238,7 +262,7 @@ def train_model(train_X,
 
         while epoch_fetched < total_X:
             # Fetch some ground truth to train the discriminator
-            for i in range(K):
+            for i in range(DISCS_PER_GEN):
                 if epoch_fetched >= total_X:
                     break
                 fetched_X = copy_X[epoch_fetched:epoch_fetched + batch_size]
