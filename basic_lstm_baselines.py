@@ -165,6 +165,9 @@ def write_baseline(cache_dir, dataset, steps_to_predict, method):
             dataset.reconstruct_poses(pred_on, seq_ids, pred_frame_numbers))
         cond_on_orig = f32(
             dataset.reconstruct_poses(cond_on, seq_ids, cond_frame_numbers))
+        pred_actions = evds['prediction_actions']
+        cond_actions = evds['conditioning_actions']
+        action_names = dataset.action_names
 
     if pred_usable is None:
         pred_usable = np.ones(pred_on_orig.shape[:2], dtype=bool)
@@ -237,6 +240,18 @@ def write_baseline(cache_dir, dataset, steps_to_predict, method):
                 compression='gzip',
                 data=cond_frame_numbers)
             fp['/seq_ids_2d_json'] = json.dumps(seq_ids.tolist())
+
+            # also action data
+            fp.create_dataset(
+                '/cond_actions_2d',
+                compression='gzip',
+                data=cond_actions)
+            fp.create_dataset(
+                '/pred_actions_2d',
+                compression='gzip',
+                data=pred_actions)
+            fp['/action_names'] = json.dumps(action_names)
+
         fp['/is_usable'] = pred_usable
         fp['/extra_data'] = json.dumps(extra_data)
 

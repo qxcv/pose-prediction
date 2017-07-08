@@ -2,7 +2,6 @@
 """Constant-velocity and zero-velocity baselines for 2D and 3D pose estimation
 datasets."""
 
-
 import sys
 sys.path.append('keras')
 
@@ -60,7 +59,8 @@ def zero_velocity(input_poses, steps_to_predict):
 
 
 def write_baseline(out_prefix, cond_on, pred_on, parents, is_3d, usable,
-                   scales, extra_data, method):
+                   scales, extra_data, method, cond_actions, pred_actions,
+                   action_names):
     meth_name = method.__name__
     steps_to_predict = pred_on.shape[1]
     out_path = out_prefix + '_' + meth_name + '.h5'
@@ -103,6 +103,12 @@ def write_baseline(out_prefix, cond_on, pred_on, parents, is_3d, usable,
                 compression='gzip',
                 shuffle=True,
                 data=result)
+            # also action data
+            fp.create_dataset(
+                '/cond_actions_2d', compression='gzip', data=cond_actions)
+            fp.create_dataset(
+                '/pred_actions_2d', compression='gzip', data=pred_actions)
+            fp['/action_names'] = json.dumps(action_names)
         fp['/is_usable'] = usable
         fp['/extra_data'] = json.dumps(extra_data)
 
@@ -117,17 +123,28 @@ if __name__ == '__main__':
         cond_on_orig = f32(dataset.reconstruct_skeletons(cond_on))
         pred_on_orig = f32(dataset.reconstruct_skeletons(pred_on))
         pred_val = pred_scales = None
+        cond_actions = pred_actions = action_names = None
     else:
         dataset = P2DDataset(args.dataset_path, 32)
         evds = dataset.get_ds_for_eval(train=False)
+        cond_on = evds['conditioning']
+        pred_on = evds['prediction']
+        pred_scales = evds['prediction_scales']
         if dataset.has_sparse_annos:
-            cond_on, pred_on, pred_scales, pred_val = evds
+            pred_val = evds['prediction_valids']
         else:
-            cond_on, pred_on, pred_scales = evds
             pred_val = None
         extra_data['pck_joints'] = dataset.pck_joints
-        cond_on_orig = f32(dataset.reconstruct_poses(cond_on))
-        pred_on_orig = f32(dataset.reconstruct_poses(pred_on))
+        seq_ids = evds['seq_ids']
+        pred_frame_numbers = evds['prediction_frame_nums']
+        cond_frame_numbers = evds['conditioning_frame_nums']
+        cond_on_orig = f32(
+            dataset.reconstruct_poses(cond_on, seq_ids, cond_frame_numbers))
+        pred_on_orig = f32(
+            dataset.reconstruct_poses(pred_on, seq_ids, pred_frame_numbers))
+        pred_actions = evds['prediction_actions']
+        cond_actions = evds['conditioning_actions']
+        action_names = dataset.action_names
 
     try:
         os.makedirs(os.path.dirname(args.output_prefix))
@@ -142,7 +159,9 @@ if __name__ == '__main__':
 
     write_baseline(args.output_prefix, cond_on_orig, pred_on_orig,
                    dataset.parents, args.is_3d, pred_val, pred_scales,
-                   extra_data, constant_velocity)
+                   extra_data, constant_velocity, cond_actions, pred_actions,
+                   action_names)
     write_baseline(args.output_prefix, cond_on_orig, pred_on_orig,
                    dataset.parents, args.is_3d, pred_val, pred_scales,
-                   extra_data, zero_velocity)
+                   extra_data, zero_velocity, cond_actions, pred_actions,
+                   action_names)

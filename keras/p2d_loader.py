@@ -518,12 +518,14 @@ class P2DDataset(object):
         scale_seqs = []
         seq_ids = []
         frame_num_blocks = []
+        action_blocks = []
         if self.has_sparse_annos:
             valid_seqs = []
 
         for vid_idx in vids.index:
             vid_poses = vids['poses'][vid_idx]
             vid_scales = vids['scales'][vid_idx]
+            vid_actions = vids['actions'][vid_idx]
             if self.has_sparse_annos:
                 true_pose_mask = vids['is_true_pose'][vid_idx]
             range_count = len(vid_poses) - frame_skip * tot_len + 1
@@ -546,26 +548,32 @@ class P2DDataset(object):
                 scale_seqs.append(scale_block)
                 seq_ids.append(seq_id)
                 frame_num_blocks.append(list(range(i, end, frame_skip)))
+                action_blocks.append(vid_actions[i:end:frame_skip])
 
         all_seqs = np.stack(out_seqs, axis=0)
         all_nums = np.stack(frame_num_blocks, axis=0)
+        all_actions = np.stack(action_blocks, axis=0)
         assert all_seqs.shape[1] == tot_len
         conditioning = all_seqs[:, :cond_len]
         prediction = all_seqs[:, cond_len:]
         all_scales = np.stack(scale_seqs, axis=0)
         prediction_scales = all_scales[:, cond_len:]
         prediction_nums = all_nums[:, cond_len:]
+        prediction_actions = all_actions[:, cond_len:]
         conditioning_scales = all_scales[:, :cond_len]
         conditioning_nums = all_nums[:, :cond_len]
+        conditioning_actions = all_actions[:, :cond_len]
         assert prediction_nums.shape == prediction.shape[:2]
         rv = {
             'seq_ids': np.asarray(seq_ids),
             'conditioning': conditioning,
             'conditioning_scales': conditioning_scales,
             'conditioning_frame_nums': conditioning_nums,
+            'conditioning_actions': conditioning_actions,
             'prediction': prediction,
             'prediction_scales': prediction_scales,
-            'prediction_frame_nums': prediction_nums
+            'prediction_frame_nums': prediction_nums,
+            'prediction_actions': prediction_actions
         }
         if self.has_sparse_annos:
             all_valids = np.stack(valid_seqs, axis=0)
