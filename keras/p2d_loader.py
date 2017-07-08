@@ -408,7 +408,11 @@ class P2DDataset(object):
 
         self.dim_obs = self.mean.size
 
-    def get_ds_for_train(self, train, seq_length, gap, discard_shorter):
+    def get_ds_for_train_extra(self, train, seq_length, gap, discard_shorter):
+        """Like get_ds_for_train, but returns actions, video names, and frame
+        numbers."""
+        rv = {}
+
         if train:
             vids = self.videos[~self.videos.is_val]
         else:
@@ -417,11 +421,16 @@ class P2DDataset(object):
         frame_skip = self.frame_skip
         pose_blocks = []
         mask_blocks = []
+        action_blocks = []
+        vid_names = []
+        frame_number_blocks = []
 
         for vid_idx in vids.index:
             vid_poses = vids['poses'][vid_idx]
             vid_masks = vids['mask'][vid_idx]
+            vid_actions = vids['actions'][vid_idx]
             range_count = len(vid_poses) - frame_skip * discard_shorter + 1
+            vid_name = vids['vid_name'][vid_idx]
 
             for i in range(0, range_count, gap):
                 end = min(len(vid_poses), i + frame_skip * seq_length)
@@ -434,6 +443,24 @@ class P2DDataset(object):
                 assert np.all(pose_block_padded[:block_length] == pose_block)
                 pose_blocks.append(pose_block_padded)
 
+                vid_names.append(vid_name)
+
+                # pad out both actions and frame numbers with something
+                # ridiculous (hope it causes out-of-range error)
+                pad_val = 0x7fff
+
+                action_block = vid_actions[i:end:frame_skip]
+                pad_spec = [(0, seq_length - block_length)]
+                pad_kwargs = dict(mode='constant', constant_values=pad_val)
+                action_block_padded = np.pad(action_block, pad_spec,
+                                             **pad_kwargs)
+                action_blocks.append(action_block_padded)
+
+                frame_number_block = np.arange(i, end, frame_skip)
+                frame_number_block_padded = np.pad(frame_number_block,
+                                                   pad_spec, **pad_kwargs)
+                frame_number_blocks.append(frame_number_block_padded)
+
                 # fill out the sequence with some masked time steps
                 mask_block = vid_masks[i:end:frame_skip]
                 pads = [(0, seq_length - block_length)] \
@@ -442,6 +469,10 @@ class P2DDataset(object):
                     mask_block, pads, mode='constant', constant_values=0)
                 mask_blocks.append(mask_block_padded.astype('float32'))
 
+        actions = np.stack(action_blocks, axis=0)
+        del action_blocks
+        frame_numbers = np.stack(frame_number_blocks, axis=0)
+        del frame_number_blocks
         poses = np.stack(pose_blocks, axis=0)
         del pose_blocks
         masks = np.stack(mask_blocks, axis=0)
@@ -450,6 +481,19 @@ class P2DDataset(object):
             poses.shape
         assert poses.shape == masks.shape, (poses.shape, masks.shape)
 
+        rv['poses'] = poses
+        rv['masks'] = masks
+        rv['actions'] = actions
+        rv['vid_names'] = vid_names
+        rv['frame_numbers'] = frame_numbers
+
+        return actions
+
+    def get_ds_for_train(self, train, seq_length, gap, discard_shorter):
+        rv = self.get_ds_for_train_extra(train, seq_length, gap,
+                                         discard_shorter)
+        poses = rv['poses']
+        masks = rv['masks']
         return poses, masks
 
     def get_pose_ds(self, train):
