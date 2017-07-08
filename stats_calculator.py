@@ -50,9 +50,7 @@ def pck(true_poses, pred_poses, valid_mask, joints, scales, thresholds=[]):
 
     rv = []
     for threshold in thresholds:
-        # XXX: I'm effectively dividing by scales *twice* here
-        # under_thresh = dists < (scales[..., None] * threshold)
-        under_thresh = dists < threshold
+        under_thresh = dists < (scales[..., None] * threshold)
         sums = np.sum(under_thresh & valid_mask[..., None], axis=0).sum(axis=1)
         # this might yield NaNs, but that's actually okay, because I'm not sure
         # that there's a better way to signal "this result is garbage and I
@@ -89,6 +87,11 @@ def to_str(data):
 
 parser = ArgumentParser()
 parser.add_argument('h5_file', help='input stats file to read from')
+parser.add_argument(
+    '--max-thresh',
+    type=float,
+    default=10,
+    help='maximum (normalised) threshold to use')
 parser.add_argument(
     '--output_dir', default='stats', help='where to put output .csv file')
 
@@ -146,7 +149,7 @@ if __name__ == '__main__':
         pck_samples = []
         # thresholds are expressed in "fraction of distance across bounding
         # box", so only really low thresholds are relevant
-        thresholds = np.linspace(0, 10, 100)
+        thresholds = np.linspace(0, args.max_thresh, 100)
         for group_name, joints in pck_joints.items():
             group_pcks = pck(flat_2d_true, flat_2d_pred, flat_mask, joints,
                              flat_scales, thresholds)

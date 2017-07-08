@@ -48,6 +48,8 @@ parser.add_argument(
     default=[],
     help='Add a joint to the plot, by name')
 parser.add_argument(
+    '--part-names', nargs='+', default=[], help='Display names for parts')
+parser.add_argument(
     '--times',
     nargs='+',
     # action='append',
@@ -130,17 +132,34 @@ def select_thresh_ind(data_table, parts, thresholds, method1, method2):
     return np.argmax(costs)
 
 
+def fix_subplots(subplots, real_rows, real_cols):
+    # plt.subplots returns either a single subplot, an array of subplots, or an
+    # array of arrays of subplots depending on the size of the grid. I have to
+    # convert that to a uniform representation so that my code doesn't break
+    sp_size = (real_rows, real_cols)
+    if not isinstance(subplots, (np.ndarray, np.generic)):
+        subplots = np.array([subplots])
+    subplots = subplots.reshape(sp_size)
+    return subplots
+
+
 def plot_xtype_thresh(data_table, all_thresholds, all_times, method_labels,
                       args):
     methods = args.methods
     parts = args.parts
+    part_names = args.part_names
+    if not part_names:
+        part_names = [s.title() for s in part_names]
+    assert len(parts) == len(part_names), 'need as many names as parts'
     sel_times = np.array(list(map(int, args.times)))
 
     # Time goes vertically downwards, parts go left-to-right
-    _, subplots = plt.subplots(
-        len(sel_times), len(parts), sharey=True, sharex=True)
+    sp_size = (len(sel_times), len(parts))
+    _, subplots = plt.subplots(*sp_size, sharey=True, sharex=True)
+    subplots = fix_subplots(subplots, *sp_size)
     common_handles = None
     for col, part in enumerate(parts):
+        part_name = part_names[col]
         for row, time in enumerate(sel_times):
             subplot = subplots[row][col]
             pcks = []
@@ -164,8 +183,13 @@ def plot_xtype_thresh(data_table, all_thresholds, all_times, method_labels,
                     subplot.plot(all_thresholds, 100 * pck, **kwargs)
 
             # Labels, titles
-            pl = 'frames' if time != 1 else 'frame'
-            subplot.set_title('%s after %d %s' % (part.title(), time, pl))
+            if args.fps is None:
+                pl = 'frames' if time != 1 else 'frame'
+                time_part = '%d %s' % (time, pl)
+            else:
+                time_s = round(time / args.fps * 100) / 100.0
+                time_part = '%gs' % time_s
+            subplot.set_title('%s after %s' % (part_name, time_part))
             is_last_row = row == len(sel_times) - 1
             if is_last_row:
                 if args.thresh_is_px:
@@ -184,6 +208,10 @@ def plot_xtype_time(data_table, all_thresholds, all_times, method_labels,
                     args):
     methods = args.methods
     parts = args.parts
+    part_names = args.part_names
+    if not part_names:
+        part_names = [s.title() for s in parts]
+    assert len(parts) == len(part_names), 'need as many names as parts'
     thresh_ind = select_thresh_ind(data_table, parts, all_thresholds,
                                    methods[0], methods[1])
     threshold = all_thresholds[thresh_ind]
@@ -194,8 +222,10 @@ def plot_xtype_time(data_table, all_thresholds, all_times, method_labels,
 
     # Parts go left-to-right, there are no times
     _, subplots = plt.subplots(1, len(parts), sharey=True, sharex=True)
+    subplots, = fix_subplots(subplots, 1, len(parts))
     common_handles = None
     for col, part in enumerate(parts):
+        part_name = part_names[col]
         subplot = subplots[col]
         pcks = []
         for method in methods:
@@ -217,7 +247,7 @@ def plot_xtype_time(data_table, all_thresholds, all_times, method_labels,
                 subplot.plot(x_axis, 100 * pck, **kwargs)
 
         # Labels, titles
-        subplot.set_title('{}@{:.2g}'.format(part.title(), threshold))
+        subplot.set_title('{}@{:.2g}'.format(part_name, threshold))
         subplot.grid(which='both')
         if args.fps is None:
             subplot.set_xlabel('Frame number')
@@ -271,8 +301,8 @@ if __name__ == '__main__':
     master_ax = plt.gcf().add_subplot(1, 1, 1)
     for side in ['top', 'bottom', 'left', 'right']:
         master_ax.spines[side].set_color('none')
-    master_ax.tick_params(labelcolor='w', top='off', bottom='off', left='off',
-                          right='off')
+    master_ax.tick_params(
+        labelcolor='w', top='off', bottom='off', left='off', right='off')
     master_ax.set_ylabel('Accuracy (%)')
     sp_leg.set_ylim(ymin=0, ymax=100)
     minor_locator = AutoMinorLocator(2)
@@ -290,8 +320,7 @@ if __name__ == '__main__':
         method_labels,
         bbox_to_anchor=(1.15, 0.5),
         loc="right",
-        frameon=False
-    )
+        frameon=False)
 
     # Save or show
     if args.save is None:
