@@ -487,7 +487,7 @@ class P2DDataset(object):
         rv['vid_names'] = vid_names
         rv['frame_numbers'] = frame_numbers
 
-        return actions
+        return rv
 
     def get_ds_for_train(self, train, seq_length, gap, discard_shorter):
         rv = self.get_ds_for_train_extra(train, seq_length, gap,
