@@ -128,6 +128,7 @@ def generic_caching_baseline(module, identifier, cache_dir, dataset):
                     result = mod_pred.predict_on_batch(input)
                     out_tensor[n:n + 1, t:t + 1] = result
             return out_tensor
+
         wrapper.method_name = identifier
         return wrapper
     # otherwise it's handled for us
@@ -243,13 +244,9 @@ def write_baseline(cache_dir, dataset, steps_to_predict, method):
 
             # also action data
             fp.create_dataset(
-                '/cond_actions_2d',
-                compression='gzip',
-                data=cond_actions)
+                '/cond_actions_2d', compression='gzip', data=cond_actions)
             fp.create_dataset(
-                '/pred_actions_2d',
-                compression='gzip',
-                data=pred_actions)
+                '/pred_actions_2d', compression='gzip', data=pred_actions)
             fp['/action_names'] = json.dumps(action_names)
 
         fp['/is_usable'] = pred_usable
@@ -272,6 +269,12 @@ parser.add_argument(
 parser.add_argument('dataset_path', help='path to input HDF5 file')
 parser.add_argument('output_dir', help='dir for output files and models')
 parser.add_argument(
+    '--polar',
+    dest='polar',
+    action='store_true',
+    default=False,
+    help='use polar parameterisation')
+parser.add_argument(
     '--3d',
     action='store_true',
     dest='is_3d',
@@ -289,7 +292,15 @@ if __name__ == '__main__':
     if args.is_3d:
         dataset = P3DDataset(args.dataset_path)
     else:
-        dataset = P2DDataset(args.dataset_path, 32)
+        if args.polar:
+            # XXX: should move "polar" parameter into the .h5 file once I
+            # decide whether polar is a good idea.
+            kwargs = dict(relative=True, polar=True)
+            print('using polar representation')
+        else:
+            print('using relative displacement representation (not polar)')
+            kwargs = {}
+        dataset = P2DDataset(args.dataset_path, 32, **kwargs)
 
     # will be passed to other fns to train
     identifier = args.model_type

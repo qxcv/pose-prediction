@@ -77,6 +77,7 @@ def head_remover(parents):
 def preprocess_sequence(poses,
                         skip,
                         parents,
+                        polar=False,
                         smooth_sigma=False,
                         head_vel=True,
                         hrm_mat=None):
@@ -133,12 +134,62 @@ def preprocess_sequence(poses,
             pa = parents[jt]
             relpose[:, :, jt] = norm_poses[:, :, jt] - norm_poses[:, :, pa]
 
-        # Collapse in last two dimensions, interleaving X and Y coordinates
-        shaped = relpose.reshape((relpose.shape[0], -1))
+        if polar:
+            polar_poses = relpose.copy()
+            for jt in range(1, len(parents)):
+                assert relpose.shape[1] == 2, relpose.shape
+                assert relpose.shape[2] == len(parents)
+
+                my_disps = relpose[:, :, jt]
+                if jt == 1:
+                    # for first bone (usually head->neck), assume parent bone
+                    # juts straight down in image coordinates
+                    parent_disps = np.zeros(relpose.shape[:2])
+                    parent_disps[:, 1] = 1
+                else:
+                    parent_disps = relpose[:, :, parents[jt]]
+
+                # first magnitude
+                polar_poses[:, 0, jt] \
+                    = np.hypot(my_disps[:, 0], my_disps[:, 1])
+
+                # now angle
+                # TODO: what about foreshortening making parent angle
+                # unreliable? I'm worried about atan2 being undefined or
+                # unstable.
+                parent_angles \
+                    = np.arctan2(parent_disps[:, 0], parent_disps[:, 1])
+                my_angles \
+                    = np.arctan2(my_disps[:, 0], my_disps[:, 1])
+                # should be counterclockwise
+                polar_poses[:, 1, jt] = my_angles - parent_angles
+
+            # Collapse in last two dimensions, interleaving axis and angle
+            shaped = polar_poses.reshape((polar_poses.shape[0], -1))
+        else:
+            # Collapse in last two dimensions, interleaving X and Y coordinates
+            shaped = relpose.reshape((relpose.shape[0], -1))
     else:
         shaped = poses.reshape((norm_poses.shape[0], -1))
 
     return shaped, offset, scale, head_locs
+
+
+def rotmats_2d(angles):
+    """Matrices for 2D, counterclockwise rotation. Adds on two dimensions to
+    input array to store 2x2 matrices instead of just angles."""
+    cosines = np.cos(angles)
+    sines = np.sin(angles)
+    rv = np.zeros(angles.shape + (2, 2))
+    # [X -; - -]
+    rv[..., 0, 0] = cosines
+    # [- X; - -]
+    rv[..., 0, 1] = -sines
+    # [- -; X -]
+    rv[..., 1, 0] = sines
+    # [- -; - X]
+    rv[..., 1, 1] = cosines
+    return rv
 
 
 def _reconstruct_poses(flat_poses,
@@ -146,7 +197,8 @@ def _reconstruct_poses(flat_poses,
                        pp_offset=None,
                        pp_scale=None,
                        head_vel=True,
-                       init_head_locs=None):
+                       init_head_locs=None,
+                       polar=False):
     """Undo parent-relative joint transform. Will not undo the uniform scaling
     applied to each sequence."""
     # shape of poses shold be (num training samples)*(time)*(flattened
@@ -182,6 +234,26 @@ def _reconstruct_poses(flat_poses,
         true_poses[:, :, :, 0] = true_heads
     else:
         true_poses[:, :, :, 0] = rel_poses[:, :, :, 0]
+
+    # "rel_poses" is bone magnitude and parent-relative angle. We need to
+    # restore actual bone displacements if we use polar parameterisation.
+    if polar:
+        # fake "root" bone points straight down
+        fake_roots = np.zeros(rel_poses.shape[:3])
+        # y = 1
+        fake_roots[..., 1] = 1
+        abs_angles = np.zeros(rel_poses.shape[:2] + (rel_poses.shape[2], ))
+        for joint in range(1, len(parents)):
+            parent_angle = abs_angles[:, :, parents[joint]]
+            # 1 is angle, 0, is magnitude
+            my_angles = parent_angle + rel_poses[:, :, 1]
+            my_mags = rel_poses[:, :, 0]
+            abs_angles[:, :, joint] = my_angles
+            # now we can change this bone by rotating roots
+            mats = rotmats_2d(my_angles)
+            fake_roots_pad = fake_roots[..., None]
+            my_bones = my_mags * np.matmul(mats, fake_roots_pad)[..., 0]
+            rel_poses[:, :, :, joint] = my_bones
 
     # now reconstruct remaining joints from parents
     for joint in range(1, len(parents)):
@@ -230,6 +302,7 @@ class P2DDataset(object):
                  have_actions=True,
                  completion_length=None,
                  relative=True,
+                 polar=False,
                  aclass_full_length=128,
                  aclass_act_length=8,
                  remove_head=False,
@@ -244,18 +317,27 @@ class P2DDataset(object):
         :param completion_length: Number of sequential poses to use in
             completion problems. Set to None to disable.
         :param relative: Whether to use parent-relative parameterisation.
+        :param polar: If relative parameterisation is used, should it be polar?
+            Note that, unlike original representation, polar representation
+            will store angle *relative to parent joint*.
         :param aclass_full_length: length of action classification sequences.
         :param aclass_act_length: how much of sequence actual action must take
             up in action classification sequence. An action classification
             sequence will thus consist of aclass_full_length -
             aclass_act_length poses in sequence (arbitrary actions) followed by
             aclass_act_length poses of the right action.
-        :param remove_head: Whether to remove head joint."""
+        :param remove_head: Whether to remove head joint.
+        :param head_vel: Should I store the displacement of the head relative
+            to the previous frame, or the absolute position?"""
         self.data_file_path = data_file_path
         self.seq_length = seq_length
         self.gap = gap
         self.have_actions = have_actions
         self.relative = relative
+        self.polar = polar
+        if polar:
+            assert relative, \
+                "Can't have non-relative polar representation."
         self.remove_head = remove_head
         self.completion_length = completion_length
         self.aclass_full_length = aclass_full_length
@@ -339,6 +421,7 @@ class P2DDataset(object):
                         orig_poses,
                         self.frame_skip,
                         self.parents if self.relative else None,
+                        polar=polar,
                         smooth_sigma=2,
                         head_vel=head_vel,
                         hrm_mat=hrm_mat)
@@ -487,7 +570,7 @@ class P2DDataset(object):
         rv['vid_names'] = vid_names
         rv['frame_numbers'] = frame_numbers
 
-        return actions
+        return rv
 
     def get_ds_for_train(self, train, seq_length, gap, discard_shorter):
         rv = self.get_ds_for_train_extra(train, seq_length, gap,
@@ -797,7 +880,8 @@ class P2DDataset(object):
                     pp_offset,
                     pp_scale,
                     head_vel=self.head_vel,
-                    init_head_locs=init_head_locs)
+                    init_head_locs=init_head_locs,
+                    polar=self.polar)
 
                 # now undo the manual scaling
                 scales = self.videos['scales'][vid_idx]
@@ -818,7 +902,10 @@ class P2DDataset(object):
             block = np.concatenate(block_rows, axis=0)
         else:
             block = _reconstruct_poses(
-                rel_block, self.parents, head_vel=self.head_vel)
+                rel_block,
+                self.parents,
+                head_vel=self.head_vel,
+                polar=self.polar)
 
         assert block.shape == rel_block.shape[:2] + (2, len(self.parents)), \
             block.shape
