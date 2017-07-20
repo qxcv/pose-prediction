@@ -82,6 +82,11 @@ parser.add_argument(
     default='thresh',
     help='choice of dimension for x-axis')
 parser.add_argument(
+    '--threshold',
+    default=None,
+    type=float,
+    help='fixed threshold to use for `--xtype time`')
+parser.add_argument(
     '--fps',
     type=float,
     default=None,
@@ -129,7 +134,9 @@ def select_thresh_ind(data_table, parts, thresholds, method1, method2):
         meth2_pcks = data_table[(method2, part)]
         separations = np.sum(meth1_pcks - meth2_pcks, axis=0)
         costs[:] += separations
-    return np.argmax(costs)
+    costs[thresholds <= 0] = -float('inf')
+    rv = np.argmax(costs)
+    return rv
 
 
 def fix_subplots(subplots, real_rows, real_cols):
@@ -149,7 +156,7 @@ def plot_xtype_thresh(data_table, all_thresholds, all_times, method_labels,
     parts = args.parts
     part_names = args.part_names
     if not part_names:
-        part_names = [s.title() for s in part_names]
+        part_names = [s.title() for s in parts]
     assert len(parts) == len(part_names), 'need as many names as parts'
     sel_times = np.array(list(map(int, args.times)))
 
@@ -212,8 +219,14 @@ def plot_xtype_time(data_table, all_thresholds, all_times, method_labels,
     if not part_names:
         part_names = [s.title() for s in parts]
     assert len(parts) == len(part_names), 'need as many names as parts'
-    thresh_ind = select_thresh_ind(data_table, parts, all_thresholds,
-                                   methods[0], methods[1])
+    if args.threshold is None:
+        thresh_ind = select_thresh_ind(data_table, parts, all_thresholds,
+                                       methods[0], methods[1])
+        print("Chose threshold %f automatically" % all_thresholds[thresh_ind])
+    else:
+        thresh_ind = np.argmin(np.abs(all_thresholds - args.threshold))
+        print("Asked for threshold %f, got threshold %f" %
+              (args.threshold, all_thresholds[thresh_ind]))
     threshold = all_thresholds[thresh_ind]
     if args.fps is None:
         x_axis = all_times
@@ -302,7 +315,11 @@ if __name__ == '__main__':
     for side in ['top', 'bottom', 'left', 'right']:
         master_ax.spines[side].set_color('none')
     master_ax.tick_params(
-        labelcolor='w', top='off', bottom='off', left='off', right='off')
+        labelcolor=(1, 1, 1, 0),
+        top='off',
+        bottom='off',
+        left='off',
+        right='off')
     master_ax.set_ylabel('Accuracy (%)')
     sp_leg.set_ylim(ymin=0, ymax=100)
     minor_locator = AutoMinorLocator(2)
@@ -315,12 +332,26 @@ if __name__ == '__main__':
     #     bbox = (0.05, -0.01, 0.9, 0.1)
     # else:
     #     bbox = (0.05, 0.88, 0.9, 0.1)
-    legend = plt.figlegend(
-        handles,
-        method_labels,
-        bbox_to_anchor=(1.15, 0.5),
-        loc="right",
-        frameon=False)
+    if args.legend_below:
+        # this is pretty hacky, for tips see
+        # https://matplotlib.org/users/legend_guide.html
+        legend = plt.figlegend(
+            handles,
+            method_labels,
+            # can give bbox_to_anchor as (x0, y0), or as (x0, y0, w, h)
+            # this will require tuning if you change plot size at all
+            bbox_to_anchor=(0.15, -0.045, 0.5, 0.1),
+            ncol=2,
+            loc='upper left',
+            borderaxespad=0.0,
+            frameon=False)
+    else:
+        legend = plt.figlegend(
+            handles,
+            method_labels,
+            bbox_to_anchor=(1.15, 0.5),
+            loc="right",
+            frameon=False)
 
     # Save or show
     if args.save is None:
