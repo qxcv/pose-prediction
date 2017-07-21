@@ -70,6 +70,11 @@ parser.add_argument(
     default=False,
     help='Put the legend below the plot rather than above it')
 parser.add_argument(
+    '--legend-below-bot',
+    type=float,
+    default=0.04,
+    help='y-coordinate of legend with --legend-below')
+parser.add_argument(
     '--dims',
     nargs=2,
     type=float,
@@ -340,7 +345,7 @@ if __name__ == '__main__':
             method_labels,
             # can give bbox_to_anchor as (x0, y0), or as (x0, y0, w, h)
             # this will require tuning if you change plot size at all
-            bbox_to_anchor=(0.15, -0.045, 0.5, 0.1),
+            bbox_to_anchor=(0.15, args.legend_below_bot, 0.5, 0.1),
             ncol=2,
             loc='upper left',
             borderaxespad=0.0,
