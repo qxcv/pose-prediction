@@ -1,0 +1,17 @@
+# These are the dependencies for the code in this repository. If you have
+# virtualenv and virtualenvwrapper installed, then you can install the following
+# dependencies in an isolated environment as follows:
+#
+# $ mkvirtualenv -p "$(which python2)" pose-prediction-env
+# $ workon pose-prediction-env
+# $ pip install -r requirements.txt
+
+h5py>=2.7.0,<2.8.0
+keras>=2.0.4,<2.1.0
+ipdb>=0.10
+numpy>=1.12.1
+tensorflow-gpu>=1.0.1,<1.1
+Theano>=0.9.0,<0.10.0
+matplotlib>=2.0.0,<2.1.0
+pandas>=0.19.2,<0.20.0
+six
