@@ -13,7 +13,7 @@ import numpy as np  # noqa: E402
 from keras.models import Model, load_model  # noqa: E402
 from tqdm import tqdm  # noqa: E402
 
-from common import CUSTOM_OBJECTS  # noqa: E402
+from common import CUSTOM_OBJECTS, mkdir_p  # noqa: E402
 from p2d_loader import P2DDataset, P3DDataset  # noqa: E402
 import predict_erd_3d as perd  # noqa: E402
 import predict_lstm_3lr as pl3lr  # noqa: E402
@@ -284,10 +284,7 @@ parser.add_argument(
 if __name__ == '__main__':
     args = parser.parse_args()
     cache_dir = args.output_dir
-    try:
-        os.makedirs(cache_dir)
-    except FileExistsError:
-        pass
+    mkdir_p(cache_dir)
 
     if args.is_3d:
         dataset = P3DDataset(args.dataset_path)

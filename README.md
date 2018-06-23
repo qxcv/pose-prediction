@@ -1,8 +1,12 @@
 # Pose prediction code
 
-<p align="center"><a href="http://users.cecs.anu.edu.au/~u5568237/ikea/">
-<img src="images/ikea-fa-teaser.jpg" target="_blank" title="Sample of images from Ikea Furniture Assembly dataset">
-</a></p>
+<p align="center">
+  <a href="http://users.cecs.anu.edu.au/~u5568237/ikea/" target="_blank">
+    <img src="images/ikea-fa-teaser.jpg"
+        title="Sample of images from Ikea Furniture Assembly dataset"
+        alt="A grid of frames from videos of people screwing legs into Ikea tables" />
+  </a>
+</p>
 
 This repository contains the code for "[Human Pose Prediction via Deep Markov
 Models](https://arxiv.org/pdf/1707.09240.pdf)" (Toyer et al., DICTA'17). The
@@ -12,7 +16,6 @@ an LSTM baseline and a deep Markov model to predict poses on that dataset.
 
 ## Installing dependencies
 
-
 This repository has several dependencies on [PyPI](https://pypi.org/), as listed
 in `requirements.txt`. If you have [the `virtualenv` and `virtualenvwrapper`
 package management tools
@@ -21,8 +24,23 @@ then you can install the following dependencies in an isolated development
 environment using the following commands in a shell:
 
     mkvirtualenv -p "$(which python2)" pose-prediction-env
-    workon pose-prediction-env
     pip install -r requirements.txt
+    
+(unless stated otherwise, it's assumed that all commands, including the ones
+above, are run from the root of this repository)
+
+The installed dependencies will only be usable from within the virtual
+environment. Whenever you open a new shell & want to use this code, you'll need
+to remember to execute `workon pose-prediction-env` to re-renter the
+environment. That will prepend the name of the environment to your shell prompt,
+like this:
+
+    $ workon pose-prediction-env
+    (pose-prediction-env)$ python -c 'print("now we can run Python, etc., with correct deps")'
+
+As a final setup step, we'll make a directory to place all of our results in:
+
+    mkdir ikea-fa-results 
 
 ## Obtaining the data
 
@@ -41,6 +59,8 @@ just want the `.h5` file for the purpose of following these instructions, then
 you can get it from [this
 link](https://mega.nz/#!ULwV1KYK!E2IxcLk3QaX3wMeMmSO5xHOMfcXZ2guYUU1Ni6KB77I).
 
+### Datasets other than Ikea FA
+
 Most other datasets supported by this code---including Human3.6M (H3.6M), the
 NTU RGBD dataset, the Penn Action dataset, and so on---require an additional
 conversion step before you can use them. Specifically, you need to use one of
@@ -51,37 +71,49 @@ how to do this (e.g. `python convert_ntu.py --help`).
 
 ## Training & evaluating an LSTM baseline
 
+In our paper, we compared against several sequence regression baselines. You can
+train and test one such baseline as follows:
+
+```bash
+# choose lstm, lstm3lr, or erd
+BASELINE=lstm
+# this will train the model; once it has trained for a while (probably a few
+# hours, or until the displayed loss stops going down), you can interrupt it
+# with Ctrl+C to stop (there's no early-stopping IIRC)
+python basic_lstm_baselines.py "$BASELINE" ikea_action_data.h5 ikea-fa-results/baselines/
+# re-running the script will produce results
+python basic_lstm_baselines.py "$BASELINE" ikea_action_data.h5 ikea-fa-results/baselines/
+```
+
+`results_${BASELINE}.h5` contains both ground truth and predicted poses for the
+Ikea FA test set. You can calculate statistics for such a file using
+`stats_calculator.py`, e.g.
+
+```bash
+python stats_calculator.py --output_dir ./ikea-fa-results/csv/ \
+  "./ikea-fa-results/baselines/results_${BASELINE}.h5"
+```
+
+This will write some PCK statistics to CSV files in `ikea-fa-results/csv`.
+
 ## Training & evaluating a deep Markov model
+
+Code for the deep Markov models is in the `structuredinference` directory. A DMM
+can be trained using the following commands:
+
+```
+# if using another dataset, replace "ikeadb" with the dataset name (e.g.
+# ntu-2d, h36m-2d, etc.)
+cd structuredinference/expt-ikeadb
+cp ../../ikea_action_data.h5 ./
+bash runme-no-actions.sh
+```
 
 
 
 # Broken instructions that I need to tidy up and merge (copied from wiki)
 
-How to generate Ikea dataset: on laptop, go into `~/repos/pose-prediction` in
-Matlab, and run the relevant conversion script. It's only one step.
-
-How to do LSTM baselines: on paloalto, do the following:
-
-```
-source activate pose-prediction
-THEANO_FLAGS=device=gpuN ./basic_lstm_baselines.py BASELINE ikea_action_data.h5 lstm-baselines/
-# wait for it to train for a while, then re-run
-THEANO_FLAGS=device=gpuN ./basic_lstm_baselines.py BASELINE ikea_action_data.h5 lstm-baselines/
-# now we have results and can copy them somewhere else for stats calculation
-cp lstm-baselines/results_BASELINE.h5 /where/I/want/it/to/go
-```
-
-`BASELINE` will be one of `erd`, `lstm` or `lstm3lr`.
-
-How to do DKF stuff: To get a model, do something like this:
-
-```
-cd ~/repos/structuredinference/expt-ikeadb
-source /usr/local/anaconda/bin/activate dkf
-./runme-no-actions.sh
-```
-
-To get results, use common/make_eval_results.py:
+To get results, use `common/make_eval_results.py`:
 
 ```bash
 cd ~/repos/structuredinference/expt-ikeadb

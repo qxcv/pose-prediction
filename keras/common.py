@@ -1,8 +1,10 @@
 """Code shared between recurrent and non-recurrent pose prediction models."""
 
 from collections import OrderedDict
+import errno
 from glob import glob
 import itertools
+import os
 from os import path
 import re
 
@@ -25,6 +27,16 @@ CUSTOM_OBJECTS = {}
 NOISE_SCHEDULE = [0.01, 0.05, 0.1, 0.2, 0.3, 0.5, 0.7]
 # Correspond to horizons of 80, 160, 240, 320, 400, 480, 560ms
 PREDICT_OFFSETS = [4, 8, 12, 16, 20, 24, 28]
+
+
+def mkdir_p(dir_path):
+    # create dir if it does not exist already (like `mkdir -p` or
+    # `os.makedirs(..., exist_ok=True)` but for Py2K or Py3K)
+    try:
+        os.makedirs(dir_path)
+    except OSError as e:
+        if e.errno != errno.EEXIST:
+            raise
 
 
 def scrape_sequences(model, data, data_mean, data_std, num_to_scrape,
