@@ -9,6 +9,7 @@
 /ref/
 /keras/h36m-3d-poses/
 /penn
+/ikea-fa-results
 /*_baselines/
 *.h5
 *.npz

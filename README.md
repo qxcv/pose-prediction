@@ -109,7 +109,25 @@ cp ../../ikea_action_data.h5 ./
 bash runme-no-actions.sh
 ```
 
+If you've just followed the instructions up to this point, then the above
+command will train on the CPU using Theano. To make Theano train the network on
+a GPU, you'll have to [install
+`libgpuarray`](http://deeplearning.net/software/libgpuarray/installation.html**.
+In either case, the network will require quite a bit of memory to train, since
+it keeps all data in memory at once; the code was developed on a GPU server with
+128GB of memory, which should be more than adequate for training.
 
+As the network trains, the command executed above will periodically output a
+series of update messages like this:
+
+	<<Bnum: 0, Batch Bound: 1.3835, |w|: 157.8771, |dw|: 1.0000, |w_opt|: 0.0000>>
+	<<-veCLL:28223.2433, KL:10996.1426, anneal:0.0100, l1:0.0000>>
+	<<Bnum: 10, Batch Bound: 0.9274, |w|: 157.9926, |dw|: 1.0000, |w_opt|: 0.1953>>
+	<<-veCLL:18792.7172, KL:10044.8623, anneal:0.0200, l1:0.0000>>
+	<<Bnum: 20, Batch Bound: 1.0508, |w|: 158.1243, |dw|: 1.0000, |w_opt|: 0.1990>>
+	<<-veCLL:21316.7489, KL:6796.2031, anneal:0.0300, l1:0.0000>>
+    
+**TODO:** explain last bit (interrupt training + test the learnt model).
 
 # Broken instructions that I need to tidy up and merge (copied from wiki)
 
