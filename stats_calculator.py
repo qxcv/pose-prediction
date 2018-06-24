@@ -11,6 +11,9 @@ import h5py
 
 from expmap import toposort, exps_to_eulers
 
+import sys; sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), 'keras')))
+from common import mkdir_p
+
 
 def angle_error(true_exp_skels, pred_exp_skels, parents):
     """L2 diference in Euler angle parameterisations, as in S-RNN paper."""
@@ -139,10 +142,7 @@ if __name__ == '__main__':
     print('3D stats collected? %s' % has_3d)
 
     dest_dir = args.output_dir
-    try:
-        os.makedirs(dest_dir)
-    except FileExistsError:
-        pass
+    mkdir_p(dest_dir)
 
     if has_2d:
         # calculate expected PCK at various thresholds

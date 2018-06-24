@@ -58,6 +58,11 @@ which you don't actually _need_ just to train some prediction models. If you
 just want the `.h5` file for the purpose of following these instructions, then
 you can get it from [this
 link](https://mega.nz/#!ULwV1KYK!E2IxcLk3QaX3wMeMmSO5xHOMfcXZ2guYUU1Ni6KB77I).
+You can [also download a tiny sample
+file](https://mega.nz/#!hORy0Y7B!8ZvQ9ifg_QxP_y5SpdpDNFy9yR5OGRF5DXDWoi5xXF8)
+(700kb vs. 20mb for original) that has only subset of the pose data, and which
+will require much less memory at train time; this option is recommended if you
+don't have a server with a lot of memory.
 
 ### Datasets other than Ikea FA
 
@@ -115,45 +120,135 @@ a GPU, you'll have to [install
 `libgpuarray`](http://deeplearning.net/software/libgpuarray/installation.html**.
 In either case, the network will require quite a bit of memory to train, since
 it keeps all data in memory at once; the code was developed on a GPU server with
-128GB of memory, which should be more than adequate for training.
+128GB of memory, which should be more than adequate for training. If you run
+into memory errors, then you may want to try again with the [tiny sample
+dataset](https://mega.nz/#!hORy0Y7B!8ZvQ9ifg_QxP_y5SpdpDNFy9yR5OGRF5DXDWoi5xXF8)
+linked in the "Obtaining the data" section above.
 
 As the network trains, the command executed above will periodically output a
 series of update messages like this:
 
-	<<Bnum: 0, Batch Bound: 1.3835, |w|: 157.8771, |dw|: 1.0000, |w_opt|: 0.0000>>
-	<<-veCLL:28223.2433, KL:10996.1426, anneal:0.0100, l1:0.0000>>
-	<<Bnum: 10, Batch Bound: 0.9274, |w|: 157.9926, |dw|: 1.0000, |w_opt|: 0.1953>>
-	<<-veCLL:18792.7172, KL:10044.8623, anneal:0.0200, l1:0.0000>>
-	<<Bnum: 20, Batch Bound: 1.0508, |w|: 158.1243, |dw|: 1.0000, |w_opt|: 0.1990>>
-	<<-veCLL:21316.7489, KL:6796.2031, anneal:0.0300, l1:0.0000>>
-    
-**TODO:** explain last bit (interrupt training + test the learnt model).
-
-# Broken instructions that I need to tidy up and merge (copied from wiki)
-
-To get results, use `common/make_eval_results.py`:
-
-```bash
-cd ~/repos/structuredinference/expt-ikeadb
-source /usr/local/anaconda/bin/activate dkf
-python ../common_pp/make_eval_results.py ./runme-no-actions.sh chkpt-ikeadb/MODEL-config.pkl chkpt-ikeadb/MODEL-EPNNN-params.npz results_dkf.h5
+```
+<<Bnum: 0, Batch Bound: 1.3835, |w|: 157.8771, |dw|: 1.0000, |w_opt|: 0.0000>>
+<<-veCLL:28223.2433, KL:10996.1426, anneal:0.0100, l1:0.0000>>
+<<Bnum: 10, Batch Bound: 0.9274, |w|: 157.9926, |dw|: 1.0000, |w_opt|: 0.1953>>
+<<-veCLL:18792.7172, KL:10044.8623, anneal:0.0200, l1:0.0000>>
+<<Bnum: 20, Batch Bound: 1.0508, |w|: 158.1243, |dw|: 1.0000, |w_opt|: 0.1990>>
+<<-veCLL:21316.7489, KL:6796.2031, anneal:0.0300, l1:0.0000>>
+…
+<<-veCLL:7437.7972, KL:2064.8850, anneal:1.0000, l1:0.0000>>
+<<Bnum: 1310, Batch Bound: 0.8889, |w|: 168.7077, |dw|: 1.0000, |w_opt|: 0.2590>>
+<<-veCLL:16589.0754, KL:1615.3231, anneal:1.0000, l1:0.0000>>
+<<(Ep 0) Bound: 1.0867 [Took 2697.6768 seconds] >>
+<<Saving at epoch 0>>
+<<Saved model (./chkpt-ikeadb/DKF_lr-8_0000e-04-vm-LR-inf-structured-dh-50-ds-50-nl-relu-bs-20-ep-2000-rs-600-ttype-simple_gated-etype-mlp-previnp-False-ar-1_0000e+03-rv-5_0000e-02-nade-False-nt-5000-cond-False-ikeadb-no-acts-EP0-params) 
+      opt (./chkpt-ikeadb/DKF_lr-8_0000e-04-vm-LR-inf-structured-dh-50-ds-50-nl-relu-bs-20-ep-2000-rs-600-ttype-simple_gated-etype-mlp-previnp-False-ar-1_0000e+03-rv-5_0000e-02-nade-False-nt-5000-cond-False-ikeadb-no-acts-EP0-optParams) weights>>
 ```
 
-MODEL will be something really long like
-`DKF_lr-8_0000e-04-vm-LR-inf-structured-dh-50-ds-50-nl-relu-bs-20-ep-2000-rs-600-ttype-simple_gated-etype-mlp-previnp-False-ar-1_0000e+03-rv-5_0000e-02-nade-False-nt-5000-cond-False-ikeadb-no-acts`;
-look in the checkpoints dir to figure out what the full thing is.
+The message at the end signifies the end of an epoch. After this message the
+model will be evaluated & the results printed to stdout too.
+
+Once the validation loss printed out at the end of an epoch stops going down,
+you should interrupt the training script with Ctrl+C & evaluate the model. The
+relevant model files are in `chkpt-ikeadb`; the directory contents will look
+something like this:
+
+```
+(pose-prediction-env)$ ls -l chkpt-ikeadb/
+total 69156
+-rw-r--r-- 1 user user     1464 Jan 24 09:47 DKF_lr-8_0000e-04-vm-LR-inf-structured-dh-50-ds-50-nl-relu-bs-20-ep-2000-rs-600-ttype-simple_gated-etype-mlp-previnp-False-ar-1_0000e+03-rv-5_0000e-02-nade-False-nt-5000-cond-False-ikeadb-no-acts-config.pkl
+-rw-r--r-- 1 user user 47199544 Jan 24 10:32 DKF_lr-8_0000e-04-vm-LR-inf-structured-dh-50-ds-50-nl-relu-bs-20-ep-2000-rs-600-ttype-simple_gated-etype-mlp-previnp-False-ar-1_0000e+03-rv-5_0000e-02-nade-False-nt-5000-cond-False-ikeadb-no-acts-EP0-optParams.npz
+-rw-r--r-- 1 user user 23599946 Jan 24 10:32 DKF_lr-8_0000e-04-vm-LR-inf-structured-dh-50-ds-50-nl-relu-bs-20-ep-2000-rs-600-ttype-simple_gated-etype-mlp-previnp-False-ar-1_0000e+03-rv-5_0000e-02-nade-False-nt-5000-cond-False-ikeadb-no-acts-EP0-params.npz
+```
+
+The `*-config.pkl` file contains information related to the structure of the
+network. The `*-EP<N>-optParams.npz` and `*-EP<N>-params.npz` files contain
+actual weights from epoch `N`. To get results, we'll have to take the model
+configuration and the `-params.npz` file for the most recent epoch & do the
+following:
+
+```bash
+# I assume you are running this from the expt-ikeadb directory
+python ../common_pp/make_eval_results.py \
+  ./runme-no-actions.sh \
+  "chkpt-ikeadb/<MODEL>-config.pkl" \
+  "chkpt-ikeadb/<MODEL>-EP<N>-params.npz" \
+  results_dkf.h5
+```
+
+After replacing `MODEL` and `N` with the values shown above, my command was:
+
+```
+python ../common_pp/make_eval_results.py \
+  ./runme-no-actions.sh \
+  "chkpt-ikeadb/DKF_lr-8_0000e-04-vm-LR-inf-structured-dh-50-ds-50-nl-relu-bs-20-ep-2000-rs-600-ttype-simple_gated-etype-mlp-previnp-False-ar-1_0000e+03-rv-5_0000e-02-nade-False-nt-5000-cond-False-ikeadb-no-acts-config.pkl" \
+  "chkpt-ikeadb/DKF_lr-8_0000e-04-vm-LR-inf-structured-dh-50-ds-50-nl-relu-bs-20-ep-2000-rs-600-ttype-simple_gated-etype-mlp-previnp-False-ar-1_0000e+03-rv-5_0000e-02-nade-False-nt-5000-cond-False-ikeadb-no-acts-EP0-params.npz" \
+  results_dkf.h5
+```
+
+That will give you a `results_dkf.h5` file (in the current directory) that you
+can calculate statistics for in the same way as the `results_${BASELINE}.h5`
+files described above. Concretely, from the `expt-ikeadb` directory, you can do this:
+
+
+```bash
+python ../../stats_calculator.py \
+  --output_dir ../../ikea-fa-results/csv/ \
+  results_dkf.h5
+```
+
+I usually put all my `results_*.h5` files in the same directory and run
+`stats_calculator.py` on all of them in one go.
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+```
+    
+# Other notes from my personal wiki
+
+*(these notes from my personal wiki are included from posterity; they may help
+with producing new plots)*
 
 How to make videos from DKF predictions: at the moment, my code for making
-videos from DKF predictions is in the DKF directory (!!). You can run it with
-the following sequence of commands:
+videos from DKF predictions is in the `structuredinference` directory. You can
+run it with the following sequence of commands:
 
 ```bash
 cd ~/repos/structuredinference/expt-ikeadb
-source activate pose-prediction  # python 3 env is fine
+source activate pose-prediction  # or `workon` or whatever
 ./make_eval_videos.py results_dkf.h5 --vid-dir some-dest-dir
 ```
 
-It will select a random sequence each time, so re-run a few times to plot a good range.
+It will select a random sequence each time, so re-run a few times to plot a good
+range.
 
 Making statistics and plotting PCK: it works something like this:
 
@@ -165,7 +260,7 @@ cd /path/to/pose-prediction/
 # e.g. ikea works well with --max-thresh 0.1, NTU works well with --max-thresh 1
 ./stats_calculator.py --output_dir ikea_baselines/ ikea_baselines/_zero_velocity.h5
 
-# the next two make actual plots of various sorts (sorry, forgot what they actually are)
+# the next two make actual plots that appear inthe paper
 ./plot_pck.py --stats-dir ~/etc/pp-baselines/2017-05-02/stats/ --methods dkf srnn erd lstm lstm3lr zero_velocity --method-names DKF SRNN ERD LSTM LSTM3LR "Zero-velocity" --parts elbows shoulders wrists --save plot.pdf --fps 16 --times 1 10 25 50 --no-thresh-px --dims 6 8 && mv plot.pdf plot-xtype-thresh.pdf
 # maybe this one has time on the x-axis, and the above has a threshold?
 ./plot_pck.py --stats-dir ~/etc/pp-baselines/2017-05-02/stats/ --methods dkf srnn erd lstm lstm3lr zero_velocity --method-names DKF SRNN ERD LSTM LSTM3LR "Zero-velocity" --parts elbows shoulders wrists --save plot.pdf --legend-below --xtype time --fps 16 && mv plot.pdf plot-xtype-time.pdf
