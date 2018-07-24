@@ -13,6 +13,7 @@ import h5py  # noqa: E402
 import numpy as np  # noqa: E402
 
 from p2d_loader import P2DDataset, P3DDataset  # noqa: E402
+from common import mkdir_p
 
 parser = argparse.ArgumentParser()
 parser.add_argument('dataset_path', help='path to input HDF5 file')
@@ -146,10 +147,7 @@ if __name__ == '__main__':
         cond_actions = evds['conditioning_actions']
         action_names = dataset.action_names
 
-    try:
-        os.makedirs(os.path.dirname(args.output_prefix))
-    except FileExistsError:
-        pass
+    mkdir_p(os.path.dirname(args.output_prefix))
 
     if pred_val is None:
         pred_val = np.ones(pred_on_orig.shape[:2], dtype=bool)
