@@ -13,7 +13,7 @@ import h5py  # noqa: E402
 import numpy as np  # noqa: E402
 
 from p2d_loader import P2DDataset, P3DDataset  # noqa: E402
-from common import mkdir_p
+from common import mkdir_p  # noqa: E402
 
 parser = argparse.ArgumentParser()
 parser.add_argument('dataset_path', help='path to input HDF5 file')
@@ -37,13 +37,13 @@ def constant_velocity(input_poses, steps_to_predict):
     assert J > D, \
         "hmm, should have XY or XYZ *last*. Is this the case?"
     # velocities for each using only last two frames
-    # TODO: is this the right way to do it? does velocity over entire sequence
-    # make more sense?
+    # TODO: is this the right way to do it? does velocity over entire
+    # conditioning sequence make more sense?
     velocities = f32(input_poses[:, -1:] - input_poses[:, -2:-1])
     nsteps = np.arange(steps_to_predict).reshape((1, -1, 1, 1)) + 1
     nsteps = f32(nsteps)
-    # broadcasting abuse :-)
-    rv = f32(velocities * nsteps)
+    # velocities * nsteps is broadcasting abuse :-)
+    rv = f32(velocities * nsteps + input_poses[:, -1:])
     assert rv.shape == (N, steps_to_predict, J, D)
     return rv
 
@@ -157,9 +157,9 @@ if __name__ == '__main__':
 
     write_baseline(args.output_prefix, cond_on_orig, pred_on_orig,
                    dataset.parents, args.is_3d, pred_val, pred_scales,
-                   extra_data, constant_velocity, cond_actions, pred_actions,
+                   extra_data, zero_velocity, cond_actions, pred_actions,
                    action_names)
     write_baseline(args.output_prefix, cond_on_orig, pred_on_orig,
                    dataset.parents, args.is_3d, pred_val, pred_scales,
-                   extra_data, zero_velocity, cond_actions, pred_actions,
+                   extra_data, constant_velocity, cond_actions, pred_actions,
                    action_names)

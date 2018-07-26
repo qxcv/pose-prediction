@@ -11,7 +11,9 @@ import h5py
 
 from expmap import toposort, exps_to_eulers
 
-import sys; sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), 'keras')))
+import sys
+sys.path.append(
+    os.path.abspath(os.path.join(os.path.dirname(__file__), 'keras')))
 from common import mkdir_p
 
 
@@ -53,12 +55,13 @@ def pck(true_poses, pred_poses, valid_mask, joints, scales, thresholds=[]):
 
     rv = []
     for threshold in thresholds:
-        under_thresh = dists < (scales[..., None] * threshold)
+        under_thresh = dists < scales[..., None] * threshold
         sums = np.sum(under_thresh & valid_mask[..., None], axis=0).sum(axis=1)
         # this might yield NaNs, but that's actually okay, because I'm not sure
         # that there's a better way to signal "this result is garbage and I
         # can't get a better one"
-        accs = sums / (len(joints) * np.sum(valid_mask, axis=0))
+        accs = sums.astype('float32') \
+            / (len(joints) * np.sum(valid_mask, axis=0))
         rv.append(accs)
 
     return rv
